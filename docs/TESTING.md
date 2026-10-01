@@ -228,6 +228,23 @@ before being wired into CI.
     against a slow or hung destination could block `abm storage add`
     indefinitely. Fixed by giving the probe's `restic.Runner` a 2-minute
     timeout.
+14. **(Found by CI, not locally)** the fix for bug 11 used `filepath.ToSlash`,
+    which only converts *the current host OS's* path separator -- a no-op on
+    Linux regardless of what the path string itself contains. The
+    corresponding test hardcoded a Windows-style path literal and happened
+    to pass on this Windows development machine but failed the instant CI's
+    Ubuntu runner executed it, since `ToSlash` left the backslashes
+    untouched there. Fixed by using an explicit, OS-independent
+    `strings.ReplaceAll(keyFile, "\\", "/")` instead, so the behavior (and
+    the test) no longer depends on which OS happens to run the code.
+15. **(Found by CI, not locally)** the new `protocol-integration` CI job's
+    SFTP test failed with "Host key verification failed" -- which is
+    actually bug 12's fix (`BatchMode=yes`) working exactly as intended:
+    failing fast instead of hanging, because the CI runner had never
+    connected to the just-started disposable container before. This was a
+    missing CI setup step, not a product bug: fixed by having the workflow
+    `ssh-keyscan` the container and trust its key first, the automated
+    equivalent of a real first-time manual connection.
 
 ## Tests that could NOT be performed, and why
 

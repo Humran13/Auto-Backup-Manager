@@ -121,6 +121,16 @@ jobs:
         run: |
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:9090/abmtest && break; sleep 1; done
           for i in $(seq 1 30); do nc -z localhost 2222 && break; sleep 1; done
+      - name: Trust the disposable SFTP container's host key
+        # ABM's SFTP backend always sets BatchMode=yes (see
+        # internal/backend.buildSFTP) so a real backup never hangs waiting
+        # on an interactive host-key prompt -- correct behavior, but it
+        # means this CI job must pre-accept the key for a container it just
+        # started itself, the same way a real first-time setup would via a
+        # normal manual `ssh` connection before registering the destination.
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts 2>/dev/null
       - name: Run real-provider integration tests
         env:
           ABM_TEST_S3_ENDPOINT: "http://localhost:9090"

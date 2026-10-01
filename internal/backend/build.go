@@ -11,7 +11,6 @@ package backend
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/Humran13/Auto-Backup-Manager/internal/config"
@@ -150,8 +149,13 @@ func buildSFTP(opt func(string) string, repoPath string) (Target, error) {
 		// C:\keys\id_ed25519 gets silently mangled (found during this
 		// project's own testing against a real SFTP server). Forward
 		// slashes are accepted by Windows OpenSSH just as well and survive
-		// that parsing intact.
-		sshArgs = append(sshArgs, "-i", filepath.ToSlash(keyFile))
+		// that parsing intact. strings.ReplaceAll, not filepath.ToSlash: the
+		// latter only converts the separator of whatever OS is running this
+		// code, so it would do nothing when ABM itself runs on Linux even
+		// though the path string (coming from config) could in principle
+		// still contain literal backslashes; a plain string replacement
+		// always normalizes them regardless of the host OS.
+		sshArgs = append(sshArgs, "-i", strings.ReplaceAll(keyFile, `\`, "/"))
 	}
 	sshArgs = append(sshArgs, user+"@"+host, "-s", "sftp")
 	return Target{
