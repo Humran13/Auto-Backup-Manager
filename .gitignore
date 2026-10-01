@@ -1,0 +1,25 @@
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Local dev/test state - never commit secrets or backup data
+*.local.yaml
+secrets.yaml
+*.key
+*.pem
+/test/tmp/
+/.abm-dev/
+
+# Go
+/vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

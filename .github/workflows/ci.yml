@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go-linux:
+    name: Go build/vet/test (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Install restic and rclone (for integration tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic rclone
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v -race
+
+  # Real per-release Ubuntu compatibility matrix for the installer and the
+  # abm binary itself (not just "whatever ubuntu-latest happens to be"):
+  # each leg runs inside that Ubuntu version's own container image, pulls
+  # the already-built binary from the go-linux job, and exercises the
+  # installer's dependency-download path plus a real doctor/backup/restore
+  # cycle against a local destination. The 26.04 leg is best-effort: if that
+  # image isn't published yet on the date this runs, it's expected to fail
+  # and should be dropped from the matrix rather than treated as a real
+  # regression.
+  ubuntu-matrix:
+    name: Ubuntu ${{ matrix.version }} install + smoke test
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.version == '26.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["20.04", "22.04", "24.04", "26.04"]
+    container:
+      image: ubuntu:${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build/runtime prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates bzip2 golang-go
+      - name: Build abm
+        run: go build -o /usr/local/bin/abm ./cmd/abm
+      - name: Install restic and rclone via install.sh's own pinned-version logic
+        run: |
+          RESTIC_VERSION=0.19.1
+          curl -fsSL -o /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2"
+          bzip2 -d /tmp/restic.bz2
+          install -m 0755 /tmp/restic /usr/local/bin/restic
+          RCLONE_VERSION=1.75.1
+          curl -fsSL -o /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip"
+          apt-get install -y unzip
+          unzip -q /tmp/rclone.zip -d /tmp
+          install -m 0755 /tmp/rclone-v${RCLONE_VERSION}-linux-amd64/rclone /usr/local/bin/rclone
+      - name: Smoke test setup -> backup -> restore
+        run: |
+          export ABM_HOME=/tmp/abmhome
+          mkdir -p /tmp/source /tmp/dest
+          echo hello > /tmp/source/file1.txt
+          abm setup --non-interactive --device-name ci-ubuntu-${{ matrix.version }}
+          abm storage add --type local --name local --path /tmp/dest
+          abm job add --name smoke --source /tmp/source --destination local
+          abm backup now smoke
+          abm snapshots smoke
+          abm restore smoke latest --target /tmp/restore
+          diff /tmp/source/file1.txt /tmp/restore/tmp/source/file1.txt
+
+  go-windows:
+    name: Go build/vet/test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Install restic and rclone (for integration tests)
+        run: |
+          choco install -y restic rclone
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v
+
+  shellcheck:
+    name: ShellCheck (install.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          additional_files: "install.sh"
+
+  psscriptanalyzer:
+    name: PSScriptAnalyzer (install.ps1)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost
+          $results | Format-Table -AutoSize
+          if ($results | Where-Object { $_.Severity -eq 'Error' }) {
+            Write-Error "PSScriptAnalyzer found errors"
+            exit 1
+          }
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for accidentally committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

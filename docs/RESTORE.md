@@ -1,0 +1,62 @@
+# Restore
+
+Restore is implemented in `internal/restic.Restore` and exposed as
+`abm restore`. It is deliberately as important and as tested as backup
+itself — see [TESTING.md](TESTING.md) for the acceptance test that exercises
+exactly this.
+
+## Basic usage
+
+```bash
+abm snapshots my-job                                   # list recoverable points, "latest" marked
+abm restore my-job latest --target /safe/restore/dir   # restore the newest successful snapshot
+abm restore my-job a1b2c3d4 --target /safe/restore/dir # restore a specific snapshot by its short ID
+abm restore my-job latest --target /tmp/x --include /var/www/html  # restore only a subpath
+```
+
+## Where restored files land
+
+restic restores a snapshot's full **absolute** path under `--target`. If a
+job's source was `/var/www`, restoring to `--target /restore` produces files
+at `/restore/var/www/...`, not `/restore/...`. On Windows, the drive letter
+becomes a folder: a source of `C:\CompanyData` restored to `--target C:\restore`
+lands at `C:\restore\C\CompanyData\...`. This is restic's own behavior, not
+something Auto-Backup-Manager changes; design job sources at a shallow,
+intentional path (e.g. `/var/www`, `C:\CompanyData`) so restored layouts stay
+predictable.
+
+## Safety rules
+
+- **`--target` is required** unless you explicitly pass `--in-place`.
+- **`--in-place` requires confirmation** (an interactive `y/N` prompt, or
+  `--yes` to skip it non-interactively) because it restores directly over
+  the job's original source path, overwriting whatever is there now.
+- Restoring never requires "undoing" a newer snapshot — every snapshot is
+  independently restorable at any time, because backups are additive (see
+  [ARCHITECTURE.md](ARCHITECTURE.md)).
+
+## Database restore
+
+Auto-Backup-Manager restores the database **dump file** (the `.sql`/`.dump`/
+`.sqlite3` file captured at backup time) via the normal file-restore path
+above. Loading that dump back into a live database server is a deliberate
+manual step, not automated, specifically so a restore can never silently
+replace a live production database:
+
+```bash
+abm restore my-job latest --target /tmp/db-restore --include "*/myapp.sql"
+# review, then explicitly:
+mysql myapp_recovery < /tmp/db-restore/.../myapp.sql     # into a new/temp database, or
+mysql myapp < /tmp/db-restore/.../myapp.sql              # into the live database, with the live service stopped
+```
+
+Prefer restoring into a new/temporary database first and validating before
+ever pointing an application at a restored database.
+
+## Interactive restore (not yet implemented)
+
+The spec's full interactive restore wizard (choose job → choose
+snapshot/latest → browse path → choose destination → preview → restore) is
+not implemented yet; today's equivalent is the explicit flag-driven
+`abm snapshots` + `abm restore` sequence above. This is an acknowledged gap,
+not a silent omission — see the project's final status report.

@@ -1,0 +1,6 @@
+# Force LF line endings regardless of platform checkout settings: install.sh
+# must run on Linux, and CRLF line endings in a shebang script break it
+# there (and Go source/YAML gain nothing from CRLF either).
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
