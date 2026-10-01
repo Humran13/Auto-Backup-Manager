@@ -69,9 +69,9 @@ func Simulate(snapshots []time.Time, now time.Time, window time.Duration) (kept 
 	cutoff := now.Add(-window)
 
 	type bucketKey struct {
-		year       int
-		month      time.Month
-		day, hour  int
+		year      int
+		month     time.Month
+		day, hour int
 	}
 	bestInBucket := map[bucketKey]time.Time{}
 

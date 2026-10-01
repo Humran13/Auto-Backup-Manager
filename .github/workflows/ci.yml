@@ -14,10 +14,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-      - name: Install restic and rclone (for integration tests)
+      - name: Install restic, rclone, and sqlite3 (for integration tests)
         run: |
           sudo apt-get update
-          sudo apt-get install -y restic rclone
+          sudo apt-get install -y restic rclone sqlite3
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -v -race
@@ -76,12 +76,62 @@ jobs:
           mkdir -p /tmp/source /tmp/dest
           echo hello > /tmp/source/file1.txt
           abm setup --non-interactive --device-name ci-ubuntu-${{ matrix.version }}
-          abm storage add --type local --name local --path /tmp/dest
+          abm storage add --provider local --name local --path /tmp/dest
           abm job add --name smoke --source /tmp/source --destination local
           abm backup now smoke
           abm snapshots smoke
           abm restore smoke latest --target /tmp/restore
           diff /tmp/source/file1.txt /tmp/restore/tmp/source/file1.txt
+
+  # Real protocol-level integration tests (test/integration's
+  # TestRealProvider_* tests): exercises ABM's actual job.Run/backend.Build
+  # code against a real S3-compatible server and a real SFTP server,
+  # catching bugs the pure-unit tests can't (two were found this way during
+  # development -- see docs/TESTING.md: a hardcoded https:// scheme that
+  # broke plain-HTTP servers, and a Windows-path/shell-escaping bug in the
+  # SFTP sftp.command override). Uses adobe/s3mock rather than MinIO: MinIO's
+  # Docker Hub images now require authentication to pull for any tag
+  # (verified during this project's development), which would make this job
+  # depend on credentials a public CI run can't have.
+  protocol-integration:
+    name: Real S3 + SFTP protocol integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Install restic
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic
+      - name: Start a disposable S3-compatible test server (adobe/s3mock)
+        run: |
+          docker run -d --name s3mock -p 9090:9090 -e initialBuckets=abmtest adobe/s3mock:latest
+      - name: Start a disposable SFTP test server with a freshly generated key
+        run: |
+          mkdir -p /tmp/sftp-keys
+          ssh-keygen -t ed25519 -f /tmp/sftp-keys/id_ed25519 -N "" -q
+          chmod 600 /tmp/sftp-keys/id_ed25519
+          docker run -d --name sftp-test -p 2222:22 \
+            -v /tmp/sftp-keys/id_ed25519.pub:/home/abmtest/.ssh/keys/id_ed25519.pub:ro \
+            -e SFTP_USERS="abmtest::1001:100:upload" \
+            atmoz/sftp
+      - name: Wait for test servers to be ready
+        run: |
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:9090/abmtest && break; sleep 1; done
+          for i in $(seq 1 30); do nc -z localhost 2222 && break; sleep 1; done
+      - name: Run real-provider integration tests
+        env:
+          ABM_TEST_S3_ENDPOINT: "http://localhost:9090"
+          ABM_TEST_S3_ACCESS_KEY: "abmtest"
+          ABM_TEST_S3_SECRET_KEY: "abmtestsecret"
+          ABM_TEST_S3_BUCKET: "abmtest"
+          ABM_TEST_SFTP_HOST: "localhost"
+          ABM_TEST_SFTP_PORT: "2222"
+          ABM_TEST_SFTP_USER: "abmtest"
+          ABM_TEST_SFTP_KEY_FILE: "/tmp/sftp-keys/id_ed25519"
+        run: go test ./test/integration/... -run TestRealProvider -v
 
   go-windows:
     name: Go build/vet/test (Windows)
@@ -93,7 +143,7 @@ jobs:
           go-version: "1.22"
       - name: Install restic and rclone (for integration tests)
         run: |
-          choco install -y restic rclone
+          choco install -y restic rclone sqlite
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -v

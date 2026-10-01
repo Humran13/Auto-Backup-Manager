@@ -17,6 +17,7 @@ func newRestoreCmd(a *app) *cobra.Command {
 	var include []string
 	var inPlace bool
 	var yes bool
+	var destination string
 
 	cmd := &cobra.Command{
 		Use:   "restore <job> <snapshot|latest>",
@@ -58,7 +59,7 @@ data.`,
 				}
 			}
 
-			r, err := resticRunnerFor(a, jobName)
+			r, err := resticRunnerFor(a, jobName, destination)
 			if err != nil {
 				return err
 			}
@@ -79,5 +80,6 @@ data.`,
 	cmd.Flags().StringArrayVar(&include, "include", nil, "restrict restore to matching path(s)/pattern(s)")
 	cmd.Flags().BoolVar(&inPlace, "in-place", false, "restore over the job's original source path (destructive, requires confirmation)")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt for --in-place")
+	cmd.Flags().StringVar(&destination, "destination", "", "destination name (default: the job's primary destination)")
 	return cmd
 }

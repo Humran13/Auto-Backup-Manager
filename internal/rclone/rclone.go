@@ -1,8 +1,12 @@
-// Package rclone wraps the rclone CLI, which Auto-Backup-Manager uses only
-// as a transport/auth layer for cloud destinations; restic drives it
-// directly via its "rclone:" repository backend for actual data transfer.
-// This package handles the parts restic doesn't: creating and testing named
-// remotes, and running the OAuth dance for providers that need it.
+// Package rclone wraps the rclone CLI, used only for providers that have no
+// restic-native backend -- the cloud-drive family (Google Drive, OneDrive,
+// Dropbox, Box, pCloud, MEGA, Jottacloud, iCloud Drive, Proton Drive) and the
+// generic "use an existing rclone remote" escape hatch. restic itself drives
+// rclone directly via its "rclone:" repository backend for actual data
+// transfer; S3/SFTP/Azure/GCS/Swift all use restic's own native backends
+// instead (see internal/backend) and never touch this package. This package
+// handles the parts restic doesn't: listing/testing/reconnecting remotes and
+// running the OAuth dance for providers that need it.
 package rclone
 
 import (
@@ -74,74 +78,6 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// S3Config configures a generic S3-compatible remote (Backblaze B2, Wasabi,
-// AWS S3, MinIO, etc). Only non-secret shape is documented here; AccessKey
-// and SecretKey are written straight into rclone.conf, which the caller must
-// have already placed under OS-restricted permissions before this runs.
-type S3Config struct {
-	Name      string
-	Endpoint  string
-	Region    string
-	AccessKey string
-	SecretKey string
-}
-
-// CreateS3Remote registers or updates an S3-compatible remote non-interactively.
-func (r *Runner) CreateS3Remote(ctx context.Context, cfg S3Config) error {
-	args := []string{
-		"config", "create", cfg.Name, "s3",
-		"provider", "Other",
-		"env_auth", "false",
-		"access_key_id", cfg.AccessKey,
-		"secret_access_key", cfg.SecretKey,
-		"endpoint", cfg.Endpoint,
-		"--non-interactive",
-	}
-	if cfg.Region != "" {
-		args = append(args, "region", cfg.Region)
-	}
-	_, err := r.run(ctx, args...)
-	return err
-}
-
-// SFTPConfig configures an SFTP remote, e.g. Hetzner Storage Box or any
-// generic SSH server. Key-based auth is preferred; Password is supported but
-// discouraged, matching the project's "prefer SSH keys" security guidance.
-type SFTPConfig struct {
-	Name       string
-	Host       string
-	Port       int
-	User       string
-	KeyFile    string
-	Password   string
-	RemotePath string
-}
-
-// CreateSFTPRemote registers or updates an SFTP remote non-interactively.
-func (r *Runner) CreateSFTPRemote(ctx context.Context, cfg SFTPConfig) error {
-	args := []string{
-		"config", "create", cfg.Name, "sftp",
-		"host", cfg.Host,
-		"user", cfg.User,
-		"--non-interactive",
-	}
-	if cfg.Port != 0 {
-		args = append(args, "port", fmt.Sprintf("%d", cfg.Port))
-	}
-	if cfg.KeyFile != "" {
-		args = append(args, "key_file", cfg.KeyFile)
-	}
-	if cfg.Password != "" {
-		obscured, err := r.Obscure(ctx, cfg.Password)
-		if err != nil {
-			return err
-		}
-		args = append(args, "pass", obscured)
-	}
-	_, err := r.run(ctx, args...)
-	return err
-}
-
 // Obscure runs rclone's own (reversible, not cryptographically strong)
 // password obscuring, required by rclone.conf for any stored password field.
 func (r *Runner) Obscure(ctx context.Context, plaintext string) (string, error) {
@@ -210,5 +146,14 @@ func (r *Runner) CreateOAuthRemote(ctx context.Context, name, providerType, clie
 // Test verifies a remote is reachable by listing its root directory.
 func (r *Runner) Test(ctx context.Context, remote string) error {
 	_, err := r.run(ctx, "lsd", remote+":")
+	return err
+}
+
+// Reconnect re-runs a remote's OAuth flow to refresh an expired or revoked
+// token, via rclone's own `config reconnect`. This is the normal path for
+// providers whose session model expects periodic reauthentication (iCloud
+// Drive, Proton Drive, Jottacloud) -- not an error-recovery hack.
+func (r *Runner) Reconnect(ctx context.Context, remote string) error {
+	_, err := r.run(ctx, "config", "reconnect", remote+":")
 	return err
 }

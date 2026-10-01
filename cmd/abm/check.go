@@ -9,6 +9,7 @@ import (
 
 func newCheckCmd(a *app) *cobra.Command {
 	var readDataSubset string
+	var destination string
 	cmd := &cobra.Command{
 		Use:   "check [job]",
 		Short: "Verify repository integrity (lightweight by default)",
@@ -31,7 +32,7 @@ rotating slice of actual pack data without downloading the whole repository.`,
 
 			failed := false
 			for _, name := range names {
-				r, err := resticRunnerFor(a, name)
+				r, err := resticRunnerFor(a, name, destination)
 				if err != nil {
 					fmt.Printf("%s: %v\n", name, err)
 					failed = true
@@ -51,5 +52,6 @@ rotating slice of actual pack data without downloading the whole repository.`,
 		},
 	}
 	cmd.Flags().StringVar(&readDataSubset, "read-data-subset", "", "also verify a subset of pack data, e.g. \"5%\" or \"1/20\"")
+	cmd.Flags().StringVar(&destination, "destination", "", "destination name (default: the job's primary destination)")
 	return cmd
 }

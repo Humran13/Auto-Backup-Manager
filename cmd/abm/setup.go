@@ -86,15 +86,18 @@ Device registered:
   config file: %s
 
 Next steps:
-  1. Add a storage destination:
-       abm storage add --type s3 --name backblaze --endpoint <url> --access-key <key> --secret-key <secret>
-     (see docs/ for Google Drive, OneDrive, Dropbox, SFTP and local destination setup)
-  2. Add a backup job:
+  1. See every supported storage provider and its maturity:
+       abm storage providers
+  2. Add a storage destination (example: a generic S3-compatible bucket):
+       abm storage add --provider generic-s3 --name backblaze --endpoint <url> --access-key <key> --secret-key <secret>
+     (see docs/providers/ for Google Drive, OneDrive, Dropbox, SFTP, local,
+     and every other provider's exact setup steps)
+  3. Add a backup job:
        abm job add --name my-job --source /path/to/data --destination backblaze
-  3. Take the first backup and verify it:
+  4. Take the first backup and verify it:
        abm backup now my-job
        abm snapshots my-job
-  4. Enable the hourly schedule:
+  5. Enable the hourly schedule:
        abm schedule set
 `, deviceName, id, organization, paths.ConfigFile())
 			return nil

@@ -20,7 +20,7 @@ into `rclone config` on the VPS.
 Then register it:
 
 ```bash
-abm storage add --type dropbox --name dropbox-primary --remote dropbox-primary
+abm storage add --provider dropbox --name dropbox-primary --remote dropbox-primary
 ```
 
 ## Testing

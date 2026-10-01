@@ -23,10 +23,11 @@ func (a *app) jobDeps() *job.Deps {
 	}
 }
 
-// resticRunnerFor resolves jobName's destination/password into a ready
-// *restic.Runner for commands (snapshots/restore/check) that talk to restic
-// directly rather than through the full job.Run orchestration.
-func resticRunnerFor(a *app, jobName string) (*restic.Runner, error) {
-	r, _, err := job.ResticRunner(a.jobDeps(), jobName)
+// resticRunnerFor resolves jobName's (optionally specific) destination and
+// password into a ready *restic.Runner for commands (snapshots/restore/
+// check) that talk to restic directly rather than through the full job.Run
+// orchestration. An empty destName resolves to the job's primary destination.
+func resticRunnerFor(a *app, jobName, destName string) (*restic.Runner, error) {
+	r, _, err := job.ResticRunner(a.jobDeps(), jobName, destName)
 	return r, err
 }

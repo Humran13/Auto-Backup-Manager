@@ -15,7 +15,7 @@ drop-in replacement for the old disk.
 
 1. Install a fresh, supported Ubuntu version.
 2. Install Auto-Backup-Manager: `curl -fsSL .../install.sh | sudo bash` (see [UBUNTU.md](UBUNTU.md)).
-3. Configure the cloud provider you backed up to: `abm storage add ...` (see the relevant provider doc, e.g. [S3.md](S3.md)).
+3. Configure the cloud provider you backed up to: `abm storage add ...` (see the relevant provider doc, e.g. [providers/S3.md](providers/S3.md)).
 4. You will need the **repository password** from wherever it was recorded
    outside the lost machine (a password manager, a sealed envelope, etc.) —
    Auto-Backup-Manager intentionally never stores it anywhere the lost

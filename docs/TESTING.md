@@ -38,9 +38,33 @@ Run in CI on both Ubuntu and Windows (`.github/workflows/ci.yml`):
   connectivity/missing-repository error.
 - **Job orchestration** (`internal/job`): database credential resolution
   (`username:password` parsing, SQLite needing none, malformed refs
-  rejected); storage lookup; repository path construction for both
-  rclone-backed and local destinations; status JSON save/load round-trip,
-  including that a never-run job correctly reports as not yet initialized.
+  rejected); storage lookup; per-destination password key resolution
+  (prefers the new per-destination secret key, falls back to the legacy
+  pre-multi-destination key for a single-destination job); status JSON
+  save/load round-trip including multiple destination results, including
+  that a never-run job correctly reports as not yet initialized.
+- **Provider registry** (`internal/provider`): every one of the 26 cataloged
+  providers has complete metadata (display name, family, backend, maturity,
+  auth method, headless classification, at least one required field, a doc
+  file that actually exists on disk) -- a provider cannot be added
+  half-finished without a test failing; secret-shaped field names are
+  verified to be marked `Secret`; the specific provider set this phase was
+  asked to cover is asserted present by ID.
+- **Repository backend construction** (`internal/backend`): local, SFTP
+  (default and non-default port/key-file forms), S3 (secret resolution,
+  env var construction, missing-credential error names the exact fix
+  command), and rclone repository-spec construction, each checked against
+  the exact restic `-r` string and environment/extra-args produced; an
+  unknown provider is rejected.
+- **Config migration** (`internal/config`): a v1 document (old fixed
+  `type`/`rclone_remote` schema, single `destination` string) is parsed with
+  its own v1 shape and converted to v2 -- verified separately for the
+  "needs no further action" case (Google Drive: the old rclone remote
+  carries forward as the new `remote` option, repository_path unchanged,
+  migrated config validates immediately) and the "needs reconfiguration"
+  case (S3/SFTP: provider mapping and non-secret options like `endpoint`
+  carry forward, but credentials that lived only in the old `rclone.conf`
+  cannot be and are not silently fabricated).
 
 ## Integration test against real restic (`test/integration`)
 
@@ -75,17 +99,52 @@ This test was run manually, found, and was used to find and fix two real
 bugs during development (see below), then automated so it runs on every CI
 push.
 
+## Real protocol-level integration tests (`test/integration`, `TestRealProvider_*`)
+
+Beyond the acceptance test's local-filesystem destination, two tests
+exercise ABM's actual `job.Run`/`backend.Build` code (not raw restic calls)
+against real protocol servers, gated behind environment variables so they
+skip cleanly without credentials and are never required for a plain
+`go test ./...`:
+
+- **`TestRealProvider_S3`** against a disposable
+  [adobe/s3mock](https://hub.docker.com/r/adobe/s3mock) container: backup,
+  modify, second backup (asserts exactly 1 changed file), restore `latest`,
+  verify content. This is a real S3-protocol round-trip through restic's
+  native `s3` backend, not a mock of our own code.
+- **`TestRealProvider_SFTP`** against a disposable
+  [atmoz/sftp](https://hub.docker.com/r/atmoz/sftp) container with a
+  freshly generated SSH key: backup, restore `latest`, verify content, via
+  restic's native `sftp` backend and ABM's `-o sftp.command` override path
+  (the one a real bug was found in -- see below).
+
+CI runs both automatically (`.github/workflows/ci.yml`'s
+`protocol-integration` job) by starting these containers and setting the
+required environment variables; a developer can do the same locally. Neither
+test uses or accepts real cloud credentials. **MinIO was the original choice
+for the S3 test** but its Docker Hub images (`minio/minio`, every tag) now
+require authentication to pull, discovered while setting this up in this
+session -- `adobe/s3mock` was substituted as a freely-pullable alternative.
+
 ## Manual testing performed during development
 
 Beyond the automated suite above, the following were exercised manually on
 Windows (this project's development machine) via the built `abm.exe`:
-`setup`, `storage add --type local`, `job add`, `backup now` (including the
-full modify/delete/backup cycle above before it was automated), `snapshots`,
-`restore` (snapshot-by-ID and `latest`, both verified byte-for-byte against
-expected file contents), `status`, `check`, `maintain` (with and without
-`--prune`), `doctor`, and `schedule set` (confirmed it correctly **fails**
-with "Access is denied" when not run elevated, rather than silently
-succeeding — Task Scheduler registration genuinely requires admin rights).
+`setup`, `storage providers`, `storage add` (generic provider-driven flow,
+local provider and two local destinations for multi-destination testing),
+`storage show`, `job add` (including `--destination` given twice with the
+default `primary-required` policy), `backup now` (including the full
+modify/delete/backup cycle above before it was automated, and a simulated
+**secondary**-destination failure that correctly reported the run as
+successful-but-degraded rather than failed), `snapshots`, `restore`
+(snapshot-by-ID and `latest`, both verified byte-for-byte against expected
+file contents), `status` (including the per-destination/degraded display),
+`check`, `maintain` (with and without `--prune`), `doctor`, and
+`schedule set` (confirmed it correctly **fails** with "Access is denied"
+when not run elevated, rather than silently succeeding -- Task Scheduler
+registration genuinely requires admin rights). The real S3/SFTP protocol
+tests above were also run manually against locally started containers
+before being wired into CI.
 
 ## Bugs found and fixed during this testing
 
@@ -128,6 +187,47 @@ succeeding — Task Scheduler registration genuinely requires admin rights).
    used to test the redactor itself). These were never real credentials.
    Fixed with a narrowly-scoped `.gitleaks.toml` allowlist for that one test
    file only — every other file is still scanned normally.
+8. **The capability probe (`abm storage add`'s init/backup/restore
+   round-trip) inherited the same Windows-unelevated-ACL quirk as the
+   original acceptance test** (restic failing to fix up a parent directory's
+   timestamp under a deeply-nested `%TEMP%` path). Fixed the same way:
+   `internal/backend.probeTempDir` uses a shallow root directly under the
+   temp drive on Windows.
+9. **`internal/backend.buildS3` hardcoded the `https://` scheme**, so any
+   plain-HTTP S3-compatible server (the `adobe/s3mock` test server used
+   above, and potentially some on-prem/self-hosted S3-compatible setups)
+   failed with "server gave HTTP response to HTTPS client." Found by
+   `TestRealProvider_S3` failing on first run. Fixed to respect an explicit
+   `http://` prefix on the configured endpoint, defaulting to `https://`
+   otherwise.
+10. **`internal/backend.buildSFTP`'s non-default-port repository spec was
+    invalid restic syntax**: it built `sftp:user@host:port:path`, but
+    restic's sftp backend has no such form -- the "host:port" fragment gets
+    treated as a single malformed hostname, which fails to connect. Found by
+    `TestRealProvider_SFTP` failing on first run against a container on a
+    non-default port. Fixed to use restic's `-o sftp.command=...` override
+    (an explicit `ssh -p <port> ...` invocation) whenever a non-default port
+    or a specific key file is configured, which is also needed for a key
+    file in the first place (restic's plain form has no syntax for either).
+11. **That same `sftp.command` override broke on Windows-style backslash
+    paths**: restic parses the option value with POSIX shell word-splitting,
+    where backslash is an escape character, so a raw `C:\keys\id_ed25519`
+    key-file path got silently mangled and ssh tried to resolve a path
+    fragment as a hostname. Found manually while validating the fix above
+    against a real SFTP container from a Windows shell. Fixed by converting
+    the key-file path to forward slashes (`filepath.ToSlash`) before
+    inserting it into the override string; Windows OpenSSH accepts forward
+    slashes identically.
+12. **An SFTP connection to a host whose key isn't yet trusted could hang
+    for minutes** (observed: ~4 minutes) before ssh gave up on its own,
+    because nothing told ssh to fail fast instead of waiting for an
+    interactive prompt that can never come when restic runs it unattended.
+    This would hang a scheduled hourly backup. Fixed by always including
+    `-o BatchMode=yes` in the constructed `sftp.command`.
+13. **`internal/backend.Probe` had no timeout at all**, so a capability test
+    against a slow or hung destination could block `abm storage add`
+    indefinitely. Fixed by giving the probe's `restic.Runner` a 2-minute
+    timeout.
 
 ## Tests that could NOT be performed, and why
 
@@ -138,20 +238,44 @@ succeeding — Task Scheduler registration genuinely requires admin rights).
   documented warning), but the elevated code path through actual VSS
   shadow-copy creation was not. This needs real-world testing on an
   administrator-run scheduled task.
-- **Real cloud provider round-trips** (Google Drive, OneDrive, Dropbox, a
-  real S3-compatible bucket, a real SFTP server) were not tested — doing so
-  would require real credentials/accounts, which weren't available in this
-  environment. Only the local-filesystem destination path was exercised.
-  The rclone wrapper functions (`CreateS3Remote`, `CreateSFTPRemote`,
-  `AuthorizeOAuth`, `CreateOAuthRemote`, `Test`) are implemented and unit-
-  testable in isolation but have no network-backed integration test.
-- **Database-aware backup/restore** (`mysqldump`/`pg_dump`/`sqlite3`) was
-  not run end-to-end in this environment because none of those tools nor a
-  database server were installed; `internal/database` has no automated test
-  exercising a real dump/restore cycle. Standing up disposable MySQL/
-  PostgreSQL containers for this (as the original project brief calls for)
-  requires a running container runtime, which wasn't available in this
-  session (Docker Desktop's engine was not running).
+- **Real OAuth cloud-drive provider round-trips** (Google Drive, OneDrive,
+  Dropbox, Box, pCloud, MEGA, Jottacloud, iCloud Drive, Proton Drive) were
+  not tested — every one of them requires either a real account and a human
+  OAuth approval, or (MEGA) a real account's credentials, neither of which
+  is something this project can safely automate or was given access to. The
+  provider registry metadata, field schemas, and rclone remote-registration
+  code path are implemented and unit-tested in isolation, but have no
+  network-backed integration test. This is why their maturity is labeled
+  `stable`/`supported` (implemented, matches upstream rclone backend
+  maturity) rather than independently validated by this project against a
+  real account — see the provider matrix in the project status report.
+- **S3 and SFTP, by contrast, were validated against real protocol servers**
+  (see above) — restic's native backends for both are exercised for real,
+  including the exact bugs that only a real server (not a unit test)
+  surfaces. Every other object-storage preset (Backblaze B2, Wasabi,
+  Cloudflare R2, Hetzner, DigitalOcean Spaces, IDrive e2, Storj, MEGA S4,
+  Azure Blob, Google Cloud Storage, OpenStack Swift) shares the exact same
+  `internal/backend` S3/Azure/GS/Swift construction code already proven
+  against s3mock, but each provider's *specific* real endpoint/account was
+  not individually tested, since that requires a real account per provider.
+- **SQLite dump/restore was validated for real**: `internal/database`'s
+  `TestDumpSQLite_RealCreateBackupDestroyRestoreVerify` creates a real
+  on-disk SQLite database with a table and rows via the `sqlite3` CLI, backs
+  it up through ABM's actual `Dump` code (SQLite's own `.backup` mechanism,
+  not a raw file copy), destroys the original, restores the dump in its
+  place, and verifies every row survived with correct values -- the exact
+  create→backup→destroy→restore→validate cycle the project's release gates
+  call for. CI installs `sqlite3` so this runs on every push.
+- **MySQL/PostgreSQL dump/restore was not run end-to-end.** Docker Desktop's
+  engine became available partway through this phase of development and was
+  used for the S3/SFTP protocol tests above, but standing up disposable
+  MySQL/PostgreSQL containers *and* installing `mysqldump`/`pg_dump` client
+  binaries on this Windows development machine (neither ships with the
+  server-only containers; a client needs its own install) was not completed
+  in the remaining time. `internal/database`'s MySQL/PostgreSQL dump
+  functions are implemented and use the documented safe flags
+  (`--single-transaction --routines --triggers --events` /
+  `--format=custom`) but have no automated test exercising a real server.
 - **Multi-day/real hourly schedule behavior** (does the systemd timer/Task
   Scheduler task actually fire on the hour, every hour, across a real
   reboot, for days) was not observed in real time; only the policy logic
@@ -172,9 +296,12 @@ succeeding — Task Scheduler registration genuinely requires admin rights).
 
 ## Known functional gaps (not bugs — not yet built)
 
-- No fully interactive, single-flow setup wizard chaining storage → job →
-  first backup → schedule in one guided session; `abm setup` bootstraps
-  device identity/config and prints the next commands to run separately.
+- No fully interactive, single-flow setup wizard chaining provider category
+  → provider → auth → job → first backup → test restore → schedule in one
+  guided terminal session; `abm setup` bootstraps device identity/config and
+  `abm storage providers`/`abm storage add`/`abm job add` are separate,
+  scriptable steps. The spec's 16-step wizard concept is not implemented as
+  one flow.
 - No interactive restore browser (choose job → browse snapshot contents →
   preview → restore); `abm snapshots` + `abm restore --include` cover the
   same ground non-interactively.
@@ -182,7 +309,17 @@ succeeding — Task Scheduler registration genuinely requires admin rights).
   [DISASTER-RECOVERY.md](DISASTER-RECOVERY.md) for the manual commands to
   run instead.
 - No automated database/Docker-bind-mount auto-detection.
-- Only a single primary destination per job is implemented; the config
-  schema and repository-path design intentionally leave room for a second,
-  differently-credentialed destination later without a breaking change, but
-  multi-destination replication itself is not built.
+- `rest-server --append-only` (restic's own recommended separate-maintenance-
+  authority design for ransomware resistance) is documented as the
+  recommended hardened architecture in [IMMUTABILITY.md](docs/IMMUTABILITY.md)
+  but is not wired into the provider registry as a first-class destination;
+  reaching it today requires the generic rclone/manual-restic path outside
+  ABM's normal flow.
+- Object Lock is supported as advisory metadata (`abm storage add
+  --immutable`) but ABM does not configure a bucket's Object Lock settings
+  itself, nor does it implement any special pruning behavior for a locked
+  destination -- see [IMMUTABILITY.md](docs/IMMUTABILITY.md) for the real
+  operational tradeoff this involves.
+- `abm storage reconnect` re-runs `rclone config reconnect`, which depends
+  on the installed rclone version's own reconnect support for that backend;
+  not independently verified against a real expired token for any provider.

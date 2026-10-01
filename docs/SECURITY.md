@@ -50,7 +50,7 @@ not immutable/WORM storage.** Credentials stolen from the machine (or a
 compromised rclone token) can delete or encrypt those backups just like any
 other file in that account. For ransomware/stolen-credential resilience, use
 an Object-Lock-capable S3-compatible destination (Backblaze B2, Wasabi, AWS
-S3) as described in [S3.md](S3.md).
+S3) as described in [providers/S3.md](providers/S3.md) and [IMMUTABILITY.md](IMMUTABILITY.md).
 
 ## Reporting a vulnerability
 

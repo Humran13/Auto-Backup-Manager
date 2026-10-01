@@ -26,7 +26,7 @@ resulting token JSON into `rclone config` on the VPS.
 Then register it:
 
 ```bash
-abm storage add --type onedrive --name onedrive-primary --remote onedrive-primary
+abm storage add --provider onedrive --name onedrive-primary --remote onedrive-primary
 ```
 
 ## Testing

@@ -43,10 +43,10 @@ func (r *Report) add(name string, ok bool, detail string) {
 
 // Options configures which environment doctor inspects.
 type Options struct {
-	ResticBinary string
-	RcloneBinary string
-	Config       *config.Config
-	StateDir     string
+	ResticBinary    string
+	RcloneBinary    string
+	Config          *config.Config
+	StateDir        string
 	SchedulerStatus func() (string, error)
 }
 
@@ -113,7 +113,15 @@ func checkJobStatus(r *Report, stateDir, name string) {
 	}
 	age := time.Since(st.LastSuccess)
 	ok := age < 25*time.Hour // hourly schedule; allow slack for one missed run
-	r.add("job:"+name+":last-backup", ok, fmt.Sprintf("last success %s ago (snapshot %s)", age.Round(time.Minute), st.LastSnapshotID))
+	snapshot := ""
+	if primary := st.Primary(); primary != nil {
+		snapshot = primary.LastSnapshotID
+	}
+	detail := fmt.Sprintf("last success %s ago (snapshot %s)", age.Round(time.Minute), snapshot)
+	if st.Degraded {
+		detail += " [degraded: a secondary destination is failing]"
+	}
+	r.add("job:"+name+":last-backup", ok, detail)
 }
 
 // requiredTools maps each database kind to the dump tool it needs.

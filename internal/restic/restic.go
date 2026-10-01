@@ -26,7 +26,12 @@ type Runner struct {
 	PasswordFile string
 	RcloneConfig string // path to rclone.conf; propagated via RCLONE_CONFIG
 	Env          []string
-	Timeout      time.Duration
+	// ExtraArgs are additional global restic flags (e.g. "-o",
+	// "sftp.command=...") inserted right after "-r <repo>", before the
+	// subcommand. See internal/backend.Target.ExtraArgs for why SFTP needs
+	// this for a non-default port or key file.
+	ExtraArgs []string
+	Timeout   time.Duration
 }
 
 // Snapshot mirrors the subset of `restic snapshots --json` fields the
@@ -43,13 +48,13 @@ type Snapshot struct {
 // BackupSummary mirrors restic's final JSON message from `backup --json`,
 // which reports what actually happened rather than assuming success.
 type BackupSummary struct {
-	MessageType        string  `json:"message_type"` // "summary" on success
-	FilesNew           int     `json:"files_new"`
-	FilesChanged       int     `json:"files_changed"`
-	FilesUnmodified    int     `json:"files_unmodified"`
-	DataAdded          uint64  `json:"data_added"`
-	TotalDuration      float64 `json:"total_duration"`
-	SnapshotID         string  `json:"snapshot_id"`
+	MessageType     string  `json:"message_type"` // "summary" on success
+	FilesNew        int     `json:"files_new"`
+	FilesChanged    int     `json:"files_changed"`
+	FilesUnmodified int     `json:"files_unmodified"`
+	DataAdded       uint64  `json:"data_added"`
+	TotalDuration   float64 `json:"total_duration"`
+	SnapshotID      string  `json:"snapshot_id"`
 }
 
 func (r *Runner) binary() string {
@@ -69,7 +74,8 @@ func (r *Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 		defer cancel()
 	}
 
-	full := append([]string{"-r", r.Repository}, args...)
+	full := append([]string{"-r", r.Repository}, r.ExtraArgs...)
+	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.binary(), full...)
 	// Start from the parent environment (PATH, LOCALAPPDATA/HOME for
 	// restic's own cache dir, etc.) rather than replacing it -- restic and

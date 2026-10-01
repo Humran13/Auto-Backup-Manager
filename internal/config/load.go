@@ -6,6 +6,8 @@ import (
 	"regexp"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Humran13/Auto-Backup-Manager/internal/provider"
 )
 
 // validNameRE restricts job/storage names to safe filesystem- and
@@ -24,21 +26,40 @@ func Load(path string) (*Config, error) {
 }
 
 // Parse validates and returns cfg, migrating it forward if it was written by
-// an older version of Auto-Backup-Manager.
+// an older version of Auto-Backup-Manager. A v1 document is detected by its
+// version field and parsed with v1's own field shape (see ParseLegacyV1)
+// before conversion, since v1's renamed fields can't be recovered from a
+// document already unmarshaled into the current struct.
 func Parse(data []byte) (*Config, error) {
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	var probe struct {
+		Version int `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	if err := Migrate(&cfg); err != nil {
+	var cfg *Config
+	if probe.Version == 0 || probe.Version == 1 {
+		v2, err := ParseLegacyV1(data)
+		if err != nil {
+			return nil, err
+		}
+		cfg = v2
+	} else {
+		cfg = &Config{}
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parsing config: %w", err)
+		}
+	}
+
+	if err := Migrate(cfg); err != nil {
 		return nil, fmt.Errorf("migrating config: %w", err)
 	}
 
-	if err := Validate(&cfg); err != nil {
+	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 // Save serializes cfg to path. It never writes secrets because Config has no
@@ -55,8 +76,12 @@ func Save(path string, cfg *Config) error {
 }
 
 // Validate strictly checks cfg for the mistakes that would otherwise surface
-// as a confusing failure mid-backup: unknown destinations, empty source
-// lists, duplicate names, and malformed retention.
+// as a confusing failure mid-backup: unknown providers/destinations, empty
+// source lists, duplicate names, missing required (non-secret) provider
+// fields, and malformed retention. It cannot check that required *secret*
+// fields (access keys, passwords) have actually been stored -- that's
+// internal/backend's job at run time, since Config has no access to the
+// secret store.
 func Validate(cfg *Config) error {
 	if cfg.Version <= 0 {
 		return fmt.Errorf("version must be set")
@@ -76,11 +101,8 @@ func Validate(cfg *Config) error {
 		if _, dup := storageNames[s.Name]; dup {
 			return fmt.Errorf("storage[%d]: duplicate storage name %q", i, s.Name)
 		}
-		if err := validateStorageType(s.Type); err != nil {
+		if err := validateStorageProvider(s); err != nil {
 			return fmt.Errorf("storage[%q]: %w", s.Name, err)
-		}
-		if s.RcloneRemote == "" && s.Type != StorageLocal {
-			return fmt.Errorf("storage[%q]: rclone_remote must be set", s.Name)
 		}
 		storageNames[s.Name] = s
 	}
@@ -100,13 +122,23 @@ func Validate(cfg *Config) error {
 	return nil
 }
 
-func validateStorageType(t StorageType) error {
-	switch t {
-	case StorageGoogleDrive, StorageOneDrive, StorageDropbox, StorageS3, StorageSFTP, StorageLocal:
-		return nil
-	default:
-		return fmt.Errorf("unknown storage type %q", t)
+func validateStorageProvider(s Storage) error {
+	p, ok := provider.Get(s.Provider)
+	if !ok {
+		return fmt.Errorf("unknown provider %q (see 'abm storage providers')", s.Provider)
 	}
+	if p.Unsupported {
+		return fmt.Errorf("provider %q is not supported: %s", s.Provider, p.UnsupportedReason)
+	}
+	for _, f := range p.RequiredFields {
+		if f.Secret {
+			continue // secret fields live in the secret store, not here
+		}
+		if s.Options[f.Key] == "" && f.Default == "" {
+			return fmt.Errorf("missing required field %q (%s) for provider %q", f.Key, f.Label, s.Provider)
+		}
+	}
+	return nil
 }
 
 func validateJob(name string, job Job, storage map[string]Storage) error {
@@ -123,11 +155,23 @@ func validateJob(name string, job Job, storage map[string]Storage) error {
 		}
 		seen[src] = true
 	}
-	if job.Destination == "" {
-		return fmt.Errorf("job %q: destination is required", name)
+	if len(job.Destinations) == 0 {
+		return fmt.Errorf("job %q: at least one destination is required", name)
 	}
-	if _, ok := storage[job.Destination]; !ok {
-		return fmt.Errorf("job %q: destination %q does not match any configured storage", name, job.Destination)
+	seenDest := map[string]bool{}
+	for _, d := range job.Destinations {
+		if _, ok := storage[d]; !ok {
+			return fmt.Errorf("job %q: destination %q does not match any configured storage", name, d)
+		}
+		if seenDest[d] {
+			return fmt.Errorf("job %q: duplicate destination %q", name, d)
+		}
+		seenDest[d] = true
+	}
+	switch job.EffectivePolicy() {
+	case PolicyAllRequired, PolicyPrimaryRequired:
+	default:
+		return fmt.Errorf("job %q: unknown destination_policy mode %q", name, job.DestinationPolicy.Mode)
 	}
 	if job.RepositoryPath == "" {
 		return fmt.Errorf("job %q: repository_path is required", name)

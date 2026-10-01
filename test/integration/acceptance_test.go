@@ -130,11 +130,11 @@ func TestAcceptance_BackupModifyDeleteRestore(t *testing.T) {
 	cfg := &config.Config{
 		Version: config.CurrentSchemaVersion,
 		Global:  config.Global{DeviceID: "dev-test", Organization: "testorg"},
-		Storage: []config.Storage{{Name: "local", Type: config.StorageLocal, Options: map[string]string{"path": destDir}}},
+		Storage: []config.Storage{{Name: "local", Provider: "local", Options: map[string]string{"path": destDir}}},
 		Jobs: map[string]config.Job{
 			"testjob": {
 				Sources:        []string{sourceDir},
-				Destination:    "local",
+				Destinations:   []string{"local"},
 				RepositoryPath: "testorg/dev-test/testjob",
 				Retention:      &config.Retention{KeepWithinHourly: "240h"},
 				Enabled:        true,
@@ -143,7 +143,7 @@ func TestAcceptance_BackupModifyDeleteRestore(t *testing.T) {
 	}
 
 	store := newMemStore(t)
-	store.Set("restic-password-testjob", "test-password-not-a-real-secret")
+	store.Set(job.ResticPasswordKey("testjob", "local"), "test-password-not-a-real-secret")
 
 	deps := &job.Deps{
 		Config:   cfg,
@@ -161,7 +161,7 @@ func TestAcceptance_BackupModifyDeleteRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup A failed: %v", err)
 	}
-	snapshotA := stA.LastSnapshotID
+	snapshotA := stA.Primary().LastSnapshotID
 	if snapshotA == "" {
 		t.Fatal("backup A produced no snapshot id")
 	}
@@ -175,8 +175,8 @@ func TestAcceptance_BackupModifyDeleteRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup B failed: %v", err)
 	}
-	if stB.FilesNew != 1 || stB.FilesChanged != 1 {
-		t.Fatalf("backup B: expected 1 new + 1 changed file, got new=%d changed=%d", stB.FilesNew, stB.FilesChanged)
+	if stB.Primary().FilesNew != 1 || stB.Primary().FilesChanged != 1 {
+		t.Fatalf("backup B: expected 1 new + 1 changed file, got new=%d changed=%d", stB.Primary().FilesNew, stB.Primary().FilesChanged)
 	}
 
 	// Delete files, then backup C.
@@ -186,10 +186,10 @@ func TestAcceptance_BackupModifyDeleteRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup C failed: %v", err)
 	}
-	latestSnapshot := stC.LastSnapshotID
+	latestSnapshot := stC.Primary().LastSnapshotID
 
 	// H: list all snapshots.
-	r, _, err := job.ResticRunner(deps, "testjob")
+	r, _, err := job.ResticRunner(deps, "testjob", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -62,7 +62,7 @@ func TestLatest_EmptyListIsError(t *testing.T) {
 
 func TestIsAlreadyInitialized(t *testing.T) {
 	cases := map[string]bool{
-		"repository master key and config already initialized": true,
+		"repository master key and config already initialized":  true,
 		"config file already exists":                            true,
 		"unable to open config file: no such file or directory": false,
 		"connection refused":                                    false,

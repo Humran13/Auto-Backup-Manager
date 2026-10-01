@@ -64,15 +64,43 @@ func TestFindStorage(t *testing.T) {
 	}
 }
 
-func TestRepositorySpec(t *testing.T) {
-	rcloneStorage := config.Storage{Type: config.StorageS3, RcloneRemote: "myremote"}
-	j := config.Job{RepositoryPath: "org/dev/job1"}
-	if got, want := repositorySpec(rcloneStorage, j), "rclone:myremote:org/dev/job1"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
+func TestResolvePasswordFile_PrefersPerDestinationKey(t *testing.T) {
+	store := &fakeStore{values: map[string]string{
+		ResticPasswordKey("job1", "dest1"): "new-password",
+		legacyResticPasswordKey("job1"):    "legacy-password",
+	}}
+	path, err := resolvePasswordFile(store, "job1", "dest1", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
+	if path != "new-password" {
+		t.Fatalf("expected the per-destination key to win, got %q", path)
+	}
+}
 
-	localStorage := config.Storage{Type: config.StorageLocal, Options: map[string]string{"path": "/mnt/backup"}}
-	if got, want := repositorySpec(localStorage, j), "/mnt/backup/org/dev/job1"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
+// TestResolvePasswordFile_FallsBackToLegacyKey covers a job migrated from
+// before multi-destination support: its password was stored under the old
+// "restic-password-<job>" key (no destination suffix), and must still be
+// found without requiring a secret-store migration step, as long as the job
+// still has exactly one destination.
+func TestResolvePasswordFile_FallsBackToLegacyKey(t *testing.T) {
+	store := &fakeStore{values: map[string]string{
+		legacyResticPasswordKey("job1"): "legacy-password",
+	}}
+	path, err := resolvePasswordFile(store, "job1", "dest1", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if path != "legacy-password" {
+		t.Fatalf("expected fallback to the legacy key, got %q", path)
+	}
+}
+
+func TestResolvePasswordFile_NoFallbackWithMultipleDestinations(t *testing.T) {
+	store := &fakeStore{values: map[string]string{
+		legacyResticPasswordKey("job1"): "legacy-password",
+	}}
+	if _, err := resolvePasswordFile(store, "job1", "dest1", 2); err == nil {
+		t.Fatal("expected no legacy fallback when the job has more than one destination")
 	}
 }

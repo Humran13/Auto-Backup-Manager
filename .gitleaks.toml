@@ -10,7 +10,11 @@ useDefault = true
 # repository is still scanned normally; a real secret added anywhere else
 # is still caught.
 [allowlist]
-description = "Fake secret-shaped fixtures used only to test the redaction function itself"
+description = "Fake secret-shaped fixtures, and prose that trips a generic-api-key false positive"
 paths = [
   '''internal/secrets/redact_test\.go''',
+  # "a public API, S3-compatible endpoint, or WebDAV interface" in prose
+  # trips the generic-api-key heuristic on "API, S3-compat..."; no secret
+  # ever belongs in a docs/ prose file.
+  '''docs/providers/UNSUPPORTED\.md''',
 ]

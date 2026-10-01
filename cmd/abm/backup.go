@@ -52,8 +52,13 @@ func newBackupNowCmd(a *app) *cobra.Command {
 					fmt.Fprintf(os.Stderr, "job %s: FAILED: %v\n", name, err)
 					continue
 				}
-				fmt.Printf("job %s: OK snapshot=%s new=%d changed=%d unmodified=%d\n",
-					name, st.LastSnapshotID, st.FilesNew, st.FilesChanged, st.FilesUnmodified)
+				primary := st.Primary()
+				degraded := ""
+				if st.Degraded {
+					degraded = " (DEGRADED: a secondary destination failed)"
+				}
+				fmt.Printf("job %s: OK snapshot=%s new=%d changed=%d unmodified=%d%s\n",
+					name, primary.LastSnapshotID, primary.FilesNew, primary.FilesChanged, primary.FilesUnmodified, degraded)
 			}
 			if failed {
 				return fmt.Errorf("one or more jobs failed")

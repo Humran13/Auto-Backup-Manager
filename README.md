@@ -2,17 +2,19 @@
 
 A standalone, cross-platform (Ubuntu/Linux + Windows) backup manager built on
 [restic](https://restic.net) (encryption, deduplication, snapshots) and
-[rclone](https://rclone.org) (cloud transport). It runs independently of any
-hosting control panel, backs up on an hourly schedule, keeps 10 days of
-hourly recovery points by default, and survives reboots and temporary
-network/cloud outages.
+[rclone](https://rclone.org) (cloud transport for providers with no
+restic-native backend). It runs independently of any hosting control panel,
+backs up on an hourly schedule, keeps 10 days of hourly recovery points by
+default, supports 25+ storage providers through a scalable provider
+registry, and survives reboots and temporary network/cloud outages.
 
-> **Status:** early foundation (pre-1.0). The core backup/restore/retention
-> engine is implemented and tested end to end (see
-> [docs/TESTING.md](docs/TESTING.md)); provider OAuth flows, the full
-> interactive setup wizard, and real-world multi-day production soak testing
-> are not yet complete. See the final report in the project history for exact
-> status.
+> **Status:** pre-1.0 foundation. The core backup/restore/retention/
+> multi-destination engine is implemented and tested end to end, including
+> real protocol-level round-trips against S3 and SFTP test servers (see
+> [docs/TESTING.md](docs/TESTING.md)). Most cloud providers are implemented
+> and documented but not yet validated against a real account (they are
+> labeled accordingly — run `abm storage providers` to see exact maturity).
+> No v1.0.0 has been tagged.
 
 ## Architecture
 
@@ -22,25 +24,35 @@ network/cloud outages.
                      │  (cmd/abm + internal/*)  │   same code on Linux/Windows
                      └────────────┬────────────┘
                                   │
+                       internal/provider (registry)
+                       internal/backend (repository construction)
+                                  │
             ┌─────────────────────┼─────────────────────┐
             ▼                     ▼                     ▼
-      ┌───────────┐        ┌────────────┐        ┌─────────────┐
+      ┌───────────┐        ┌────────────┐        ┌──────────────┐
       │  restic   │        │   rclone   │        │  mysqldump / │
-      │ snapshot, │◄──────►│  transport │        │  pg_dump /   │
-      │ encrypt,  │        │  + OAuth   │        │  sqlite3     │
-      │ dedupe    │        └─────┬──────┘        └──────────────┘
-      └─────┬─────┘              │
-            │                    ▼
-            │       Google Drive / OneDrive / Dropbox /
-            │       S3-compatible / SFTP / local disk
-            ▼
-   restic repository, scoped per job:
+      │ snapshot, │◄──────►│  (cloud-   │        │  pg_dump /   │
+      │ encrypt,  │        │  drive     │        │  sqlite3     │
+      │ dedupe    │        │  providers │        └──────────────┘
+      └─────┬─────┘        │  only)     │
+            │              └─────┬──────┘
+            │                    │
+            ▼                    ▼
+   restic native backends:   rclone remotes:
+   local, sftp, s3, azure,   Google Drive, OneDrive, Dropbox, Box,
+   gs, swift                 pCloud, MEGA, Jottacloud, iCloud, Proton
+
+   restic repository, scoped per (job, destination):
    <destination>/<organization>/<device-id>/<job-name>
 ```
 
+Adding a provider that reuses an existing backend (another S3-compatible
+preset, another rclone remote) is a registry entry in
+`internal/provider/registry.go` — no change to backup, retention,
+scheduling, or restore logic. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 Scheduling is OS-native, not a resident daemon: a systemd timer on Linux, a
-Task Scheduler task (running as SYSTEM) on Windows. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Task Scheduler task (running as SYSTEM) on Windows.
 
 ## Install
 
@@ -66,11 +78,20 @@ the safer download-then-inspect install method and platform specifics.
 
 ```bash
 abm setup
-abm storage add --type s3 --name backblaze --endpoint <url> --access-key <key> --secret-key <secret>
+abm storage providers                  # see every supported provider and its maturity
+abm storage add --provider generic-s3 --name backblaze --endpoint <url> --access-key <key> --secret-key <secret>
 abm job add --name my-job --source /var/www --destination backblaze
 abm backup now my-job
 abm snapshots my-job
 abm schedule set
+```
+
+A job can target more than one destination for redundancy:
+
+```bash
+abm job add --name my-job --source /var/www \
+    --destination backblaze --destination local-disk \
+    --policy primary-required   # default: a secondary failing degrades, doesn't fail, the run
 ```
 
 ## Commands
@@ -78,25 +99,42 @@ abm schedule set
 | Command | Purpose |
 |---|---|
 | `abm setup` | First-run device identity + config bootstrap |
-| `abm storage add/list/test` | Manage cloud/local destinations |
-| `abm job add/list/edit/remove` | Manage backup jobs |
+| `abm storage providers` | List every supported provider and its maturity |
+| `abm storage add/list/show/test/reconnect/remove` | Manage storage destinations |
+| `abm job add/list/edit/remove/set-db-credentials` | Manage backup jobs |
 | `abm backup now [job\|--all]` | Run a backup immediately |
 | `abm maintain [job\|--all] [--prune]` | Apply retention policy |
-| `abm snapshots [job]` | List recoverable snapshots |
+| `abm snapshots [job] [--destination]` | List recoverable snapshots |
 | `abm restore <job> <snapshot\|latest> --target DIR` | Restore to a safe target directory |
 | `abm check [job]` | Repository integrity check |
-| `abm status` | Last backup status per job |
+| `abm status` | Last backup status per job, per destination |
 | `abm doctor` | Full environment/config diagnostics |
 | `abm schedule show/set` | Manage the hourly scheduler |
 | `abm logs` | Recent log lines |
 | `abm uninstall` | Remove the scheduler only (never repositories) |
+
+## Supported storage providers
+
+25+ providers across cloud drives, object storage, SFTP, local disk, and a
+generic rclone passthrough for anything else — see `abm storage providers`
+for the live, evidence-based maturity of each, and
+[docs/providers/](docs/providers/) for per-provider setup. Highlights:
+
+| Family | Providers |
+|---|---|
+| Cloud drives | Google Drive, OneDrive, Dropbox, Box, pCloud, MEGA, Jottacloud, iCloud Drive*, Proton Drive* |
+| Object storage | AWS S3, Backblaze B2, Wasabi, Cloudflare R2, Hetzner, DigitalOcean Spaces, IDrive e2, Storj, MEGA S4, MinIO, Azure Blob, Google Cloud Storage, OpenStack Swift, generic S3-compatible |
+| Other | SFTP, local/external disk, any existing rclone remote |
+
+\* marked **experimental** — see their docs for why.
 
 ## Documentation
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — design and package layout
 - [SECURITY.md](docs/SECURITY.md) — secret handling, encryption
 - [THREAT-MODEL.md](docs/THREAT-MODEL.md) — what this does and doesn't protect against
-- [GOOGLE-DRIVE.md](docs/GOOGLE-DRIVE.md), [ONEDRIVE.md](docs/ONEDRIVE.md), [DROPBOX.md](docs/DROPBOX.md), [S3.md](docs/S3.md), [SFTP.md](docs/SFTP.md) — per-provider setup
+- [IMMUTABILITY.md](docs/IMMUTABILITY.md) — ransomware resilience, Object Lock, append-only design
+- [docs/providers/](docs/providers/) — setup for every storage provider
 - [UBUNTU.md](docs/UBUNTU.md), [WINDOWS.md](docs/WINDOWS.md) — platform-specific install/operation
 - [DATABASES.md](docs/DATABASES.md) — MySQL/PostgreSQL/SQLite-safe backup
 - [RESTORE.md](docs/RESTORE.md) — restore workflows and safety rules

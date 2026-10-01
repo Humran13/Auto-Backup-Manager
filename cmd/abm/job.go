@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Humran13/Auto-Backup-Manager/internal/config"
+	"github.com/Humran13/Auto-Backup-Manager/internal/job"
 	"github.com/Humran13/Auto-Backup-Manager/internal/paths"
 	"github.com/Humran13/Auto-Backup-Manager/internal/retention"
 )
@@ -70,7 +71,7 @@ func newJobListCmd(a *app) *cobra.Command {
 				if !j.Enabled {
 					state = "disabled"
 				}
-				fmt.Printf("%-20s %-9s destination=%-15s sources=%v\n", name, state, j.Destination, j.Sources)
+				fmt.Printf("%-20s %-9s destinations=%v (policy=%s) sources=%v\n", name, state, j.Destinations, j.EffectivePolicy(), j.Sources)
 			}
 			return nil
 		},
@@ -113,19 +114,26 @@ func newJobRemoveCmd(a *app) *cobra.Command {
 
 func newJobAddCmd(a *app) *cobra.Command {
 	var (
-		name, destination, repoPath, keepWithin string
-		sources, excludes, tags                 []string
-		maxFileSizeMB                            int64
-		disabled, recoverExisting                bool
+		name, repoPath, keepWithin, policy string
+		sources, excludes, tags, dests     []string
+		maxFileSizeMB                      int64
+		disabled, recoverExisting          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Add a backup job",
 		Long: `Add a backup job.
 
-By default this generates a brand-new repository password for a new job. To
-instead recover a repository that already exists at this destination/path
-(disaster recovery onto a replacement machine), pass --recover-existing and
+--destination may be given more than once to back the job up to multiple
+destinations; the first one given is the primary. By default (--policy
+primary-required) a secondary destination failing only marks the run
+degraded, while the primary succeeding still counts as a success; pass
+--policy all-required to instead require every destination to succeed.
+
+By default this generates a brand-new repository password for each new
+destination. To instead recover a repository that already exists at a
+destination/path (disaster recovery onto a replacement machine), pass
+--recover-existing with exactly one --destination and
 --repository-path pointing at the ORIGINAL org/device-id/job-name path; you
 will be prompted for the existing password on stdin, never as a command-line
 argument, so it never ends up in shell history or a process listing.`,
@@ -136,8 +144,16 @@ argument, so it never ends up in shell history or a process listing.`,
 			if len(sources) == 0 {
 				return fmt.Errorf("at least one --source is required")
 			}
-			if destination == "" {
-				return fmt.Errorf("--destination is required (see 'abm storage list')")
+			if len(dests) == 0 {
+				return fmt.Errorf("at least one --destination is required (see 'abm storage list')")
+			}
+			if recoverExisting && len(dests) != 1 {
+				return fmt.Errorf("--recover-existing requires exactly one --destination")
+			}
+			switch config.DestinationPolicyMode(policy) {
+			case "", config.PolicyAllRequired, config.PolicyPrimaryRequired:
+			default:
+				return fmt.Errorf("--policy must be %q or %q", config.PolicyAllRequired, config.PolicyPrimaryRequired)
 			}
 			cfg := a.cfg
 			if cfg == nil {
@@ -150,51 +166,54 @@ argument, so it never ends up in shell history or a process listing.`,
 				keepWithin = retention.DefaultKeepWithinHourly
 			}
 
-			job := config.Job{
-				Sources:        sources,
-				Excludes:       excludes,
-				MaxFileSizeMB:  maxFileSizeMB,
-				Destination:    destination,
-				RepositoryPath: repoPath,
-				Schedule:       "hourly",
-				Retention:      &config.Retention{KeepWithinHourly: keepWithin, PruneSchedule: "daily"},
-				Tags:           tags,
-				Enabled:        !disabled,
+			j := config.Job{
+				Sources:           sources,
+				Excludes:          excludes,
+				MaxFileSizeMB:     maxFileSizeMB,
+				Destinations:      dests,
+				DestinationPolicy: config.DestinationPolicy{Mode: config.DestinationPolicyMode(policy)},
+				RepositoryPath:    repoPath,
+				Schedule:          "hourly",
+				Retention:         &config.Retention{KeepWithinHourly: keepWithin, PruneSchedule: "daily"},
+				Tags:              tags,
+				Enabled:           !disabled,
 			}
 
 			if cfg.Jobs == nil {
 				cfg.Jobs = map[string]config.Job{}
 			}
-			cfg.Jobs[name] = job
+			cfg.Jobs[name] = j
 			if err := config.Save(paths.ConfigFile(), cfg); err != nil {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			var password string
-			if recoverExisting {
-				fmt.Print("Enter the existing repository password: ")
-				reader := bufio.NewReader(os.Stdin)
-				line, _ := reader.ReadString('\n')
-				password = strings.TrimSpace(line)
-				if password == "" {
-					return fmt.Errorf("no password entered")
+			for _, dest := range dests {
+				var password string
+				if recoverExisting {
+					fmt.Printf("Enter the existing repository password for destination %q: ", dest)
+					reader := bufio.NewReader(os.Stdin)
+					line, _ := reader.ReadString('\n')
+					password = strings.TrimSpace(line)
+					if password == "" {
+						return fmt.Errorf("no password entered")
+					}
+				} else {
+					var err error
+					password, err = randomPassword()
+					if err != nil {
+						return fmt.Errorf("generating repository password: %w", err)
+					}
 				}
-			} else {
-				var err error
-				password, err = randomPassword()
-				if err != nil {
-					return fmt.Errorf("generating repository password: %w", err)
+				if err := a.secrets.Set(job.ResticPasswordKey(name, dest), password); err != nil {
+					return fmt.Errorf("storing repository password for %q: %w", dest, err)
 				}
-			}
-			if err := a.secrets.Set("restic-password-"+name, password); err != nil {
-				return fmt.Errorf("storing repository password: %w", err)
 			}
 
 			if recoverExisting {
 				fmt.Printf("job %q added, using the provided existing repository password.\n", name)
 				fmt.Println("Run 'abm snapshots", name, "' to confirm you can see the expected history before restoring.")
 			} else {
-				fmt.Printf("job %q added. A new repository password was generated and stored securely.\n", name)
+				fmt.Printf("job %q added with %d destination(s). New repository password(s) were generated and stored securely.\n", name, len(dests))
 				fmt.Println("Run 'abm backup now", name, "' to take the first backup.")
 			}
 			return nil
@@ -203,7 +222,8 @@ argument, so it never ends up in shell history or a process listing.`,
 	cmd.Flags().StringVar(&name, "name", "", "job name")
 	cmd.Flags().StringArrayVar(&sources, "source", nil, "source path to back up (repeatable)")
 	cmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclusion pattern (repeatable)")
-	cmd.Flags().StringVar(&destination, "destination", "", "storage destination name (see 'abm storage list')")
+	cmd.Flags().StringArrayVar(&dests, "destination", nil, "storage destination name (repeatable; first is primary; see 'abm storage list')")
+	cmd.Flags().StringVar(&policy, "policy", "", "multi-destination policy: all-required|primary-required (default primary-required)")
 	cmd.Flags().StringVar(&repoPath, "repository-path", "", "path within the destination (default: org/device-id/job-name)")
 	cmd.Flags().StringVar(&keepWithin, "keep-within-hourly", "", "retention window, e.g. 240h for 10 days (default)")
 	cmd.Flags().Int64Var(&maxFileSizeMB, "max-file-size-mb", 0, "skip files larger than this (0 = unlimited)")

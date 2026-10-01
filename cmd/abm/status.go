@@ -33,14 +33,34 @@ func newStatusCmd(a *app) *cobra.Command {
 					fmt.Println()
 					continue
 				}
-				fmt.Printf("%-20s last success: %-25s snapshot: %-10s new=%d changed=%d unmodified=%d destination=%s\n",
-					name, st.LastSuccess.Format("2006-01-02 15:04:05 MST"), st.LastSnapshotID,
-					st.FilesNew, st.FilesChanged, st.FilesUnmodified, st.Destination)
+				degraded := ""
+				if st.Degraded {
+					degraded = " [DEGRADED: a secondary destination is failing]"
+				}
+				fmt.Printf("%-20s last success: %-25s%s\n", name, st.LastSuccess.Format("2006-01-02 15:04:05 MST"), degraded)
+				for _, d := range st.Destinations {
+					result := "OK"
+					if d.LastError != "" {
+						result = "FAILED: " + d.LastError
+					}
+					fmt.Printf("%-20s   -> %-15s snapshot=%-10s new=%d changed=%d unmodified=%d  %s\n",
+						"", d.Name, shortID(d.LastSnapshotID), d.FilesNew, d.FilesChanged, d.FilesUnmodified, result)
+				}
+				if st.LastWarning != "" {
+					fmt.Printf("%-20s WARNING: %s\n", "", st.LastWarning)
+				}
 				if st.LastError != "" {
-					fmt.Printf("%-20s WARNING: most recent attempt failed: %s\n", "", st.LastError)
+					fmt.Printf("%-20s MOST RECENT ATTEMPT FAILED: %s\n", "", st.LastError)
 				}
 			}
 			return nil
 		},
 	}
+}
+
+func shortID(id string) string {
+	if len(id) > 10 {
+		return id[:10]
+	}
+	return id
 }

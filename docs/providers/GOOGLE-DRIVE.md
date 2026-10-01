@@ -41,12 +41,12 @@ rclone config --config /etc/auto-backup-manager/rclone.conf
 ```
 
 `internal/rclone.Runner.AuthorizeOAuth`/`CreateOAuthRemote` wrap this same
-flow programmatically; a fully scripted `abm storage add --type gdrive
+flow programmatically; a fully scripted `abm storage add --provider google-drive
 --headless` is not implemented yet — use `rclone config` directly as above,
 then register it:
 
 ```bash
-abm storage add --type gdrive --name gdrive-primary --remote gdrive-primary
+abm storage add --provider google-drive --name gdrive-primary --remote gdrive-primary
 ```
 
 ## Testing

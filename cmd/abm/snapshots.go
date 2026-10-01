@@ -10,7 +10,8 @@ import (
 )
 
 func newSnapshotsCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var destination string
+	cmd := &cobra.Command{
 		Use:   "snapshots [job]",
 		Short: "List recoverable snapshots for one job, or all jobs",
 		Args:  cobra.MaximumNArgs(1),
@@ -26,7 +27,7 @@ func newSnapshotsCmd(a *app) *cobra.Command {
 			}
 
 			for _, name := range names {
-				r, err := resticRunnerFor(a, name)
+				r, err := resticRunnerFor(a, name, destination)
 				if err != nil {
 					fmt.Printf("%s: %v\n", name, err)
 					continue
@@ -49,4 +50,6 @@ func newSnapshotsCmd(a *app) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&destination, "destination", "", "destination name (default: the job's primary destination)")
+	return cmd
 }
