@@ -107,13 +107,22 @@ function Get-VerifiedFile($Url, $SumsUrl, $FileName, $DestDir) {
     return $filePath
 }
 
+function Test-AlreadyInstalled($ExePath, $VersionArg, $ExpectedVersion) {
+    if (-not (Test-Path $ExePath)) { return $false }
+    $v = (& $ExePath $VersionArg) 2>$null
+    return [bool]($v -match [regex]::Escape($ExpectedVersion))
+}
+
 function Install-Restic($TmpDir) {
-    $resticInstalled = $false
-    if (Get-Command restic -ErrorAction SilentlyContinue) {
-        $v = (& restic version) 2>$null
-        if ($v -match [regex]::Escape($ResticVersion)) { $resticInstalled = $true }
-    }
-    if ($resticInstalled) {
+    # Checks the actual install destination directly, not Get-Command (PATH
+    # lookup): BinDir is only added to the *machine* PATH at the very end of
+    # a first run, which an already-open shell doesn't pick up until
+    # restarted (the script says so). Re-running the installer in that same
+    # unrefreshed shell must still detect an already-correct install at
+    # BinDir and skip redownloading it -- found while manually verifying the
+    # exact partial-install-recovery scenario this installer is meant to
+    # handle.
+    if (Test-AlreadyInstalled (Join-Path $BinDir "restic.exe") "version" $ResticVersion) {
         Write-Log "restic $ResticVersion already installed"
         return
     }
@@ -127,12 +136,7 @@ function Install-Restic($TmpDir) {
 }
 
 function Install-Rclone($TmpDir) {
-    $rcloneInstalled = $false
-    if (Get-Command rclone -ErrorAction SilentlyContinue) {
-        $v = (& rclone version) 2>$null
-        if ($v -match [regex]::Escape($RcloneVersion)) { $rcloneInstalled = $true }
-    }
-    if ($rcloneInstalled) {
+    if (Test-AlreadyInstalled (Join-Path $BinDir "rclone.exe") "version" $RcloneVersion) {
         Write-Log "rclone $RcloneVersion already installed"
         return
     }
