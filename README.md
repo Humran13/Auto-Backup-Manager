@@ -14,7 +14,9 @@ registry, and survives reboots and temporary network/cloud outages.
 > [docs/TESTING.md](docs/TESTING.md)). Most cloud providers are implemented
 > and documented but not yet validated against a real account (they are
 > labeled accordingly — run `abm storage providers` to see exact maturity).
-> No v1.0.0 has been tagged.
+> No v1.0.0 has been tagged; the install commands below resolve the current
+> pre-1.0 **release candidate** (see [RELEASE.json](RELEASE.json)), never a
+> stable release that doesn't exist yet.
 
 ## Architecture
 
@@ -70,8 +72,15 @@ irm https://raw.githubusercontent.com/Humran13/Auto-Backup-Manager/main/install.
 
 Both scripts download pinned, checksum-verified restic/rclone releases (see
 `install.sh`/`install.ps1` for the exact versions), are idempotent, and never
-touch an existing config, secrets, or backup repository. See
-[docs/UBUNTU.md](docs/UBUNTU.md) and [docs/WINDOWS.md](docs/WINDOWS.md) for
+touch an existing config, secrets, or backup repository. Neither script ever
+queries GitHub's `/releases/latest` API (it 404s for a repo with no stable
+release, and never returns a prerelease even once one exists) -- they
+resolve the exact approved version from [RELEASE.json](RELEASE.json)
+instead. To pin a specific version yourself: `ABM_VERSION=v0.9.0-rc.1 curl
+... | sudo bash` (Linux) or `irm ... -OutFile install.ps1; .\install.ps1
+-AbmVersion v0.9.0-rc.1` (Windows, since piping to `iex` can't pass
+parameters). See [docs/UBUNTU.md](docs/UBUNTU.md) and
+[docs/WINDOWS.md](docs/WINDOWS.md) for
 the safer download-then-inspect install method and platform specifics.
 
 ## Quick start

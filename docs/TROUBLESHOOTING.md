@@ -12,6 +12,28 @@ Scheduler both provide a normal environment), but if you see it running
 `abm` manually from a stripped-down shell/service account, ensure that
 environment variable is set.
 
+## Installer fails with a raw GitHub API 404 ("Invoke-RestMethod ... Not Found")
+
+Fixed as of the version of `install.ps1`/`install.sh` that ships with this
+doc. The old installer logic asked GitHub's `/releases/latest` API for the
+`abm` binary, which 404s outright for a repository with no stable release
+yet -- true for this entire pre-1.0 phase -- and would keep failing even
+after the first release, since `/releases/latest` never returns a
+prerelease either. Both installers now resolve the exact approved version
+from [RELEASE.json](../RELEASE.json) in this repo instead, which always
+points at a real, published release (currently a pre-1.0 release
+candidate). If you still hit this, you're running an old copy of the
+installer script -- re-download it fresh rather than using a cached copy.
+
+## "No Auto-Backup-Manager release is available for this channel."
+
+This is the installer's own controlled failure message (never a raw GitHub
+API response) for when version resolution genuinely can't find a release --
+e.g. `RELEASE.json` is unreachable, or you pinned `ABM_VERSION`/`-AbmVersion`
+to a tag that was never published. Check
+[the repository's releases page](https://github.com/Humran13/Auto-Backup-Manager/releases)
+for the exact tags that actually exist.
+
 ## "Access is denied" / "VSS error: ... E_ACCESSDENIED" (Windows backup)
 
 Expected when running `abm backup now` from a **non-elevated** PowerShell:

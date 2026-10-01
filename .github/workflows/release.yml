@@ -1,0 +1,99 @@
+name: Release
+
+# Builds and publishes a GitHub release strictly from a pushed tag, gated on
+# the same build/vet/test suite the main CI workflow runs. Never publishes
+# from a raw workflow-run artifact URL (those are ephemeral); the published
+# release assets are the only thing install.sh/install.ps1 ever download.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Install restic, rclone, and sqlite3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic rclone sqlite3
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v
+      - run: bash test/install/install_test.sh
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Install restic and rclone
+        run: choco install -y restic rclone
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v
+      - shell: pwsh
+        run: .\test\install\Install.Tests.ps1
+
+  publish:
+    name: Build and publish release assets
+    needs: [test-linux, test-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build release binaries
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${TAG}" -o build/linux_amd64/abm ./cmd/abm
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${TAG}" -o build/windows_amd64/abm.exe ./cmd/abm
+
+          tar -czf "dist/abm_${TAG}_linux_amd64.tar.gz" -C build/linux_amd64 abm
+          (cd build/windows_amd64 && zip -q "../../dist/abm_${TAG}_windows_amd64.zip" abm.exe)
+
+          ( cd dist && sha256sum *.tar.gz *.zip > checksums.txt )
+          cat dist/checksums.txt
+
+      - name: Determine prerelease flag
+        id: channel
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # SemVer convention: a hyphen marks a prerelease identifier
+          # (v0.9.0-rc.1), no hyphen marks a stable release (v1.0.0). This
+          # project is pre-1.0 and has no stable releases yet -- every tag
+          # pushed today is expected to contain one.
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease --title "$TAG (Release Candidate -- NOT production ready)")
+          else
+            flags+=(--title "$TAG")
+          fi
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/checksums.txt \
+            "${flags[@]}" \
+            --notes "Pre-1.0 release candidate. See docs/TESTING.md for exactly what has and hasn't been validated. Not production-ready -- see the project status report for the evidence-based verdict."

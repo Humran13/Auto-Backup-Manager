@@ -21,45 +21,74 @@ set -euo pipefail
 # under an existing deployment. Bump these deliberately, testing each bump.
 RESTIC_VERSION="0.19.1"
 RCLONE_VERSION="1.75.1"
-ABM_VERSION="${ABM_VERSION:-latest}"
+
+# ABM_VERSION pins an exact release tag (e.g. "v0.9.0-rc.1"), bypassing
+# RELEASE.json entirely. Leave unset/"auto" to resolve the project's
+# currently-approved release via RELEASE.json instead -- see resolve_abm_tag
+# below for exactly why this project never queries GitHub's own
+# /releases/latest API endpoint.
+ABM_VERSION="${ABM_VERSION:-auto}"
+# RELEASE_JSON_URL is overridable only so install_test.sh can point it at a
+# local fixture file (via a file:// URL) without touching the network; real
+# installs should never need to set this.
+RELEASE_JSON_URL="${RELEASE_JSON_URL:-https://raw.githubusercontent.com/Humran13/Auto-Backup-Manager/main/RELEASE.json}"
 
 REPO="Humran13/Auto-Backup-Manager"
 BIN_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/auto-backup-manager"
 STATE_DIR="/var/lib/auto-backup-manager"
 LOG_DIR="/var/log/auto-backup-manager"
+TMP_DIR=""
+RESTIC_ARCH=""
+RCLONE_ARCH=""
 
 log()  { echo "[abm-install] $*"; }
 fail() { echo "[abm-install] ERROR: $*" >&2; exit 1; }
-
-[ "$(id -u)" -eq 0 ] || fail "this installer must be run as root (sudo bash install.sh)"
-
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64|amd64) RESTIC_ARCH="amd64"; RCLONE_ARCH="amd64" ;;
-  aarch64|arm64) RESTIC_ARCH="arm64"; RCLONE_ARCH="arm64" ;;
-  *) fail "unsupported architecture: $ARCH" ;;
-esac
-
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
-
 require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "required command '$1' not found"; }
-require_cmd curl
-require_cmd tar
-require_cmd sha256sum
-require_cmd systemctl
+
+# parse_json_field extracts a top-level string field's value from JSON text
+# passed on stdin, without requiring jq (not guaranteed present on every
+# target system). Deliberately minimal: RELEASE.json is maintainer-authored
+# and flat, not arbitrary user input.
+parse_json_field() {
+  local field="$1"
+  grep -o "\"${field}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | sed -E "s/.*:[[:space:]]*\"([^\"]*)\"/\1/" | head -n1
+}
+
+# resolve_abm_tag decides which release tag to install, in order:
+#   1. ABM_VERSION, if explicitly set to something other than "auto"
+#   2. RELEASE.json's "version" field, fetched from this repo's own main
+#      branch
+# It deliberately never calls GitHub's /repos/{repo}/releases/latest API:
+# that endpoint 404s outright for a repository with no stable release at
+# all, and even once one exists, it never returns a prerelease -- exactly
+# the failure a real Windows install hit (see docs/TROUBLESHOOTING.md). A
+# repo-local metadata file sidesteps both problems and never depends on an
+# ephemeral GitHub Actions artifact URL. Prints the resolved tag on stdout,
+# or nothing on failure -- callers must check for an empty result and fail
+# with their own clear message rather than exposing a raw API response.
+resolve_abm_tag() {
+  if [ "$ABM_VERSION" != "auto" ]; then
+    echo "$ABM_VERSION"
+    return 0
+  fi
+  local json
+  json="$(curl -fsSL "$RELEASE_JSON_URL" 2>/dev/null)" || return 1
+  echo "$json" | parse_json_field "version"
+}
 
 # download_and_verify URL SHA256SUMS_URL FILENAME
 # Downloads FILENAME and its published checksum file, and refuses to
 # continue if the checksum doesn't match -- an installer that fetches
 # arbitrary binaries over HTTPS without verifying them is exactly the supply
-# chain risk this project's own threat model calls out.
+# chain risk this project's own threat model calls out. Fails closed: a
+# missing asset, a missing checksum entry, or a mismatch are all fatal, with
+# no insecure fallback.
 download_and_verify() {
   local url="$1" sums_url="$2" filename="$3"
   log "downloading $filename"
-  curl -fsSL -o "$TMP_DIR/$filename" "$url"
-  curl -fsSL -o "$TMP_DIR/SHA256SUMS" "$sums_url"
+  curl -fsSL -o "$TMP_DIR/$filename" "$url" || fail "download failed: $url"
+  curl -fsSL -o "$TMP_DIR/SHA256SUMS" "$sums_url" || fail "checksum file download failed: $sums_url"
   ( cd "$TMP_DIR" && grep " $filename\$" SHA256SUMS | sha256sum -c - ) \
     || fail "checksum verification failed for $filename"
 }
@@ -95,46 +124,78 @@ install_rclone() {
 
 install_abm() {
   # Prefer a published GitHub release asset; fall back to building from
-  # source when run from inside a checked-out copy of this repository
-  # (useful before the first tagged release exists, and for developers).
+  # source only when run from inside a checked-out copy of this repository
+  # (useful for developers) -- never installed silently on an end user's
+  # machine as a fallback for a missing release.
   if [ -f "./cmd/abm/main.go" ] && command -v go >/dev/null 2>&1; then
     log "building abm from local source"
     go build -o "$BIN_DIR/abm" ./cmd/abm
     return
   fi
 
-  local api_url tag asset_url sums_url
-  if [ "$ABM_VERSION" = "latest" ]; then
-    api_url="https://api.github.com/repos/${REPO}/releases/latest"
-  else
-    api_url="https://api.github.com/repos/${REPO}/releases/tags/${ABM_VERSION}"
-  fi
-  tag="$(curl -fsSL "$api_url" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
-  [ -n "$tag" ] || fail "no published Auto-Backup-Manager release found; clone the repo and re-run this script from its root to build from source instead"
+  local tag
+  tag="$(resolve_abm_tag)" || tag=""
+  [ -n "$tag" ] || fail "No Auto-Backup-Manager release is available for this channel."
 
-  asset_url="https://github.com/${REPO}/releases/download/${tag}/abm_${tag}_linux_${RESTIC_ARCH}.tar.gz"
-  sums_url="https://github.com/${REPO}/releases/download/${tag}/checksums.txt"
+  if command -v abm >/dev/null 2>&1 && abm --version 2>/dev/null | grep -q "$tag"; then
+    log "Auto-Backup-Manager $tag already installed"
+    return
+  fi
+
+  local asset="abm_${tag}_linux_${RESTIC_ARCH}.tar.gz"
+  local asset_url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+  local sums_url="https://github.com/${REPO}/releases/download/${tag}/checksums.txt"
   log "installing Auto-Backup-Manager ${tag}"
-  download_and_verify "$asset_url" "$sums_url" "abm_${tag}_linux_${RESTIC_ARCH}.tar.gz"
-  tar -xzf "$TMP_DIR/abm_${tag}_linux_${RESTIC_ARCH}.tar.gz" -C "$TMP_DIR"
+  download_and_verify "$asset_url" "$sums_url" "$asset"
+  tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
   install -m 0755 "$TMP_DIR/abm" "$BIN_DIR/abm"
 }
 
-log "creating directories"
-install -d -m 0750 "$CONFIG_DIR" "$CONFIG_DIR/secrets" "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/dumps" "$LOG_DIR"
+main() {
+  [ "$(id -u)" -eq 0 ] || fail "this installer must be run as root (sudo bash install.sh)"
 
-install_restic
-install_rclone
-install_abm
+  local arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) RESTIC_ARCH="amd64"; RCLONE_ARCH="amd64" ;;
+    aarch64|arm64) RESTIC_ARCH="arm64"; RCLONE_ARCH="arm64" ;;
+    *) fail "unsupported architecture: $arch" ;;
+  esac
 
-log "install complete."
-log ""
-log "Next steps:"
-log "  sudo abm setup"
-log "  sudo abm storage add --type <s3|sftp|local|...> ..."
-log "  sudo abm job add --name my-job --source /var/www --destination <name>"
-log "  sudo abm backup now my-job"
-log "  sudo abm schedule set"
-log ""
-log "Uninstalling later (sudo abm uninstall) removes only the schedule; it"
-log "never deletes config, secrets, or backup repositories."
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  require_cmd curl
+  require_cmd tar
+  require_cmd sha256sum
+  require_cmd systemctl
+
+  log "creating directories"
+  install -d -m 0750 "$CONFIG_DIR" "$CONFIG_DIR/secrets" "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/dumps" "$LOG_DIR"
+
+  install_restic
+  install_rclone
+  install_abm
+
+  log "install complete."
+  log ""
+  log "Next steps:"
+  log "  sudo abm setup"
+  log "  sudo abm storage providers"
+  log "  sudo abm storage add --provider <id> --name <name> ..."
+  log "  sudo abm job add --name my-job --source /var/www --destination <name>"
+  log "  sudo abm backup now my-job"
+  log "  sudo abm schedule set"
+  log ""
+  log "Uninstalling later (sudo abm uninstall) removes only the schedule; it"
+  log "never deletes config, secrets, or backup repositories."
+}
+
+# Guarded so install_test.sh can source this file (to unit-test
+# resolve_abm_tag/parse_json_field/install_abm's error path in isolation,
+# with no network access and no root required) without running the real
+# install -- every top-level side effect (root check, arch detection, temp
+# dir creation) lives inside main(), never at source time.
+if [ "${ABM_INSTALL_TESTING:-0}" != "1" ]; then
+  main "$@"
+fi

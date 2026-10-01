@@ -168,6 +168,13 @@ jobs:
         with:
           scandir: "."
           additional_files: "install.sh"
+      - name: Run install.sh release-resolution regression tests
+        # Specifically guards against the real bug found in manual Windows
+        # testing: a public install command silently depending on GitHub's
+        # /releases/latest API, which 404s for a repo with no stable release
+        # and never returns a prerelease even once one exists. No network
+        # access or root required -- see test/install/install_test.sh.
+        run: bash test/install/install_test.sh
 
   psscriptanalyzer:
     name: PSScriptAnalyzer (install.ps1)
@@ -184,6 +191,9 @@ jobs:
             Write-Error "PSScriptAnalyzer found errors"
             exit 1
           }
+      - name: Run install.ps1 release-resolution regression tests
+        shell: pwsh
+        run: .\test\install\Install.Tests.ps1
 
   secret-scan:
     name: Secret scan
