@@ -103,11 +103,42 @@ abm job add --name my-job --source /var/www \
     --policy primary-required   # default: a secondary failing degrades, doesn't fail, the run
 ```
 
+## Web GUI
+
+A local, professional web interface is available as an alternative to the
+CLI — same engine underneath, not a separate implementation:
+
+```bash
+abm gui
+```
+
+Opens `http://127.0.0.1:8765` (your default browser launches automatically
+on Windows; on Linux the URL is printed, and opened too if a desktop browser
+is available). If it's your first run, a setup wizard appears automatically.
+The GUI binds to `127.0.0.1` only — it is never exposed on a public or LAN
+interface — and every operation it performs calls the exact same Go
+functions the CLI commands do (`internal/job`, `internal/backend`,
+`internal/provider`, `internal/doctor`, `internal/scheduler`): nothing is
+possible through the GUI that isn't also possible through the CLI, and
+nothing shells out to `abm` itself. See
+[docs/GUI.md](docs/GUI.md) for the full page-by-page walkthrough and current
+limitations (e.g. cloud-drive OAuth providers still need `rclone config` run
+once outside the GUI).
+
+```
+abm gui --port 9000      # use a different port
+abm gui --no-open        # print the URL only, don't launch a browser
+```
+
+The CLI remains fully supported and is the better fit for scripting/CI;
+nothing in this project requires the GUI.
+
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `abm setup` | First-run device identity + config bootstrap |
+| `abm gui` | Start the local web GUI (127.0.0.1 only) |
 | `abm storage providers` | List every supported provider and its maturity |
 | `abm storage add/list/show/test/reconnect/remove` | Manage storage destinations |
 | `abm job add/list/edit/remove/set-db-credentials` | Manage backup jobs |
@@ -139,6 +170,7 @@ for the live, evidence-based maturity of each, and
 
 ## Documentation
 
+- [GUI.md](docs/GUI.md) — web GUI pages, setup wizard, security, limitations
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — design and package layout
 - [SECURITY.md](docs/SECURITY.md) — secret handling, encryption
 - [THREAT-MODEL.md](docs/THREAT-MODEL.md) — what this does and doesn't protect against

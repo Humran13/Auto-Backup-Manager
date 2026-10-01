@@ -126,6 +126,61 @@ for the S3 test** but its Docker Hub images (`minio/minio`, every tag) now
 require authentication to pull, discovered while setting this up in this
 session -- `adobe/s3mock` was substituted as a freely-pullable alternative.
 
+## GUI tests (`cmd/abm`, `test/integration`)
+
+- **Unit tests** (`cmd/abm`, no filesystem/paths dependency, run as a normal
+  `go test ./...`): CSRF middleware (rejects a mutating request with no
+  token, rejects a wrong token, accepts the correct one, exempts GET and the
+  `/api/csrf` endpoint itself), the 127.0.0.1-only middleware (rejects a
+  non-loopback remote address, accepts `127.0.0.1`/`::1`), provider/job JSON
+  view conversion (round-trips registry fields, preserves the `Secret` flag
+  on sensitive fields -- losing that flag would be a real exposure risk),
+  the stage-tracking `slog.Handler` (maps real log messages to GUI stages,
+  ignores unrelated ones), run-state bookkeeping, "port already in use"
+  reporting, and graceful shutdown on context cancellation.
+- **`TestGUI_FullAcceptanceScenario`** (`test/integration`): the project's
+  required 16-step GUI acceptance scenario, executed for real against a
+  live `abm gui` subprocess over its actual HTTP API (the same API the
+  browser frontend calls) -- fresh config via the setup endpoint, add local
+  storage, add a job, create files, run a backup, modify/add/delete files,
+  run a second backup (asserts exactly 2 snapshots), delete the original
+  data, restore the first snapshot and verify it byte-for-byte, restore
+  `latest` and verify that byte-for-byte, then check the doctor endpoint.
+  Nothing in this test shells out to an `abm` CLI subcommand for the actual
+  operations; the only subprocess is `abm gui` itself.
+- **`TestGUI_SecurityAndErrorHandling`** (`test/integration`, 9 subtests):
+  a secret value set via `/api/storage` never appears in a subsequent
+  `/api/storage` GET response; a job with no sources, an unknown provider,
+  a nonexistent job/run ID, and malformed JSON are all rejected with a
+  clear 4xx and an error message rather than a crash; a mutating request
+  with no CSRF token is rejected; a path-traversal-shaped storage name in a
+  DELETE URL simply doesn't match any configured storage (it's never used
+  as a filesystem path) and returns a normal 404.
+- **Why a subprocess, not direct Go function calls**: `internal/paths`
+  resolves `ABM_HOME` into package-level variables once, at process start;
+  a real child process with its own isolated `ABM_HOME` (via `exec.Cmd.Env`)
+  is the only way to exercise the GUI's actual on-disk behavior from a
+  different test package.
+- **What was not tested**: no pixel-level/headless-browser (e.g. Playwright)
+  testing was performed, and the frontend was never opened in an actual
+  browser window during this development session either -- only driven via
+  curl and the automated HTTP-based tests above. The HTML/CSS/JS is
+  therefore unverified at the rendering/visual level; what is verified is
+  every API call the frontend's `app.js` makes (CSRF, path-traversal,
+  secret-redaction, and error-handling correctness all depend on the
+  HTTP/API layer, not on how it's drawn). Opening the GUI in a real browser
+  and clicking through each page is an explicit remaining task before
+  trusting the visual layer. A real bug was found and fixed via the
+  automated tests regardless: `defaultRestoreTarget`
+  originally used second-granularity timestamps for its directory name, so
+  two restores started within the same second (easy to trigger
+  automatically, plausible for a user double-clicking restore) collided
+  into the same directory; since restic's restore never deletes stale files
+  left over from a prior restore into the same target, a second restore
+  could appear to still contain files only an earlier, different snapshot
+  actually had. Fixed with `os.MkdirTemp` for guaranteed uniqueness,
+  verified by running the full test suite three times in a row.
+
 ## Manual testing performed during development
 
 Beyond the automated suite above, the following were exercised manually on

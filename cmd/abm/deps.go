@@ -3,14 +3,22 @@ package main
 import (
 	"time"
 
+	"github.com/Humran13/Auto-Backup-Manager/internal/config"
 	"github.com/Humran13/Auto-Backup-Manager/internal/job"
 	"github.com/Humran13/Auto-Backup-Manager/internal/paths"
 	"github.com/Humran13/Auto-Backup-Manager/internal/restic"
 )
 
 func (a *app) jobDeps() *job.Deps {
+	return a.jobDepsFor(a.requireConfig())
+}
+
+// jobDepsFor builds job.Deps from an explicit config rather than
+// a.requireConfig() (which os.Exits on a missing config) -- used by the GUI,
+// which must return a JSON error instead of killing the whole server.
+func (a *app) jobDepsFor(cfg *config.Config) *job.Deps {
 	return &job.Deps{
-		Config:       a.requireConfig(),
+		Config:       cfg,
 		ResticBinary: "restic",
 		RcloneConfig: paths.RcloneConfigFile(),
 		StateDir:     paths.StateDir,

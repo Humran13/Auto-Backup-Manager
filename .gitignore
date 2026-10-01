@@ -23,3 +23,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Local AI assistant tooling state (not part of the project)
+.claude/
