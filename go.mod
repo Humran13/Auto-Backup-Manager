@@ -1,10 +1,10 @@
 module github.com/Humran13/Auto-Backup-Manager
 
-go 1.26.0
+go 1.22
 
 require (
 	github.com/spf13/cobra v1.8.1
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.21.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

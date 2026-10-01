@@ -1,0 +1,16 @@
+title = "Auto-Backup-Manager gitleaks config"
+
+[extend]
+useDefault = true
+
+# internal/secrets/redact_test.go intentionally contains fake,
+# AWS-key-shaped and API-key-shaped strings (e.g. "AKIAABCDEFGHIJKLMNOP",
+# "sk-1234567890") as test fixtures for internal/secrets.Redact -- they are
+# not real credentials and were never valid ones. Every other file in the
+# repository is still scanned normally; a real secret added anywhere else
+# is still caught.
+[allowlist]
+description = "Fake secret-shaped fixtures used only to test the redaction function itself"
+paths = [
+  '''internal/secrets/redact_test\.go''',
+]

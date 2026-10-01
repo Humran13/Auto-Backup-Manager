@@ -43,12 +43,23 @@ jobs:
       image: ubuntu:${{ matrix.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install build/runtime prerequisites
+      - name: Install build prerequisites
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates bzip2 golang-go
+          DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates bzip2 unzip
+      - name: Install a known-good Go toolchain
+        # Ubuntu's own golang-go package is far too old on several supported
+        # releases (Focal ships ~1.13, Jammy ~1.18) to build Go 1.22+ module
+        # code at all -- it predates the log/slog package entirely. Installing
+        # a pinned upstream Go tarball directly sidesteps that, the same way
+        # install.sh pins restic/rclone instead of trusting apt's version.
+        run: |
+          GO_VERSION=1.22.9
+          curl -fsSL -o /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+          tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
       - name: Build abm
-        run: go build -o /usr/local/bin/abm ./cmd/abm
+        run: /usr/local/go/bin/go build -o /usr/local/bin/abm ./cmd/abm
       - name: Install restic and rclone via install.sh's own pinned-version logic
         run: |
           RESTIC_VERSION=0.19.1
@@ -57,7 +68,6 @@ jobs:
           install -m 0755 /tmp/restic /usr/local/bin/restic
           RCLONE_VERSION=1.75.1
           curl -fsSL -o /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip"
-          apt-get install -y unzip
           unzip -q /tmp/rclone.zip -d /tmp
           install -m 0755 /tmp/rclone-v${RCLONE_VERSION}-linux-amd64/rclone /usr/local/bin/rclone
       - name: Smoke test setup -> backup -> restore

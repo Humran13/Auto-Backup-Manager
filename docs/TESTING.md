@@ -113,6 +113,21 @@ succeeding — Task Scheduler registration genuinely requires admin rights).
    tool (e.g. `pg_dump` with no PostgreSQL job configured) wasn't
    installed.** Fixed to only fail a tool check when a configured job
    actually depends on it.
+6. **(Found by CI, not locally)** `go.mod`'s `go` directive had been
+   auto-bumped by `go mod tidy` to `1.26.0` using this machine's installed
+   Go 1.27 toolchain. That patch-version directive format broke every older
+   Go toolchain trying to parse it, and separately, Ubuntu 20.04/22.04's
+   `apt` `golang-go` packages (1.13/1.18) predate `log/slog` entirely and
+   can't build this code at any `go.mod` version. Fixed by pinning
+   `go 1.22` and having CI's Ubuntu-version matrix install a known-good Go
+   toolchain directly from go.dev rather than trusting each distro's apt
+   package, the same pin-and-verify approach already used for restic/rclone.
+7. **(Found by CI, not locally)** the gitleaks secret-scan job flagged the
+   intentionally fake, secret-shaped test fixtures in
+   `internal/secrets/redact_test.go` (e.g. an AWS-access-key-shaped string
+   used to test the redactor itself). These were never real credentials.
+   Fixed with a narrowly-scoped `.gitleaks.toml` allowlist for that one test
+   file only — every other file is still scanned normally.
 
 ## Tests that could NOT be performed, and why
 
