@@ -60,18 +60,22 @@ try {
     $noVersionJsonPath = Join-Path $FixtureDir "no-version-field.json"
     Write-FixtureFile $noVersionJsonPath '{"channel":"rc"}'
 
-    function ToFileUrl($path) { "file:///" + ($path -replace '\\', '/') }
-
     Invoke-Case "explicit AbmVersion bypasses RELEASE.json (no network)" {
         $AbmVersion = "v9.9.9"
         $ReleaseJsonUrl = "file:///does/not/exist"
         (Resolve-AbmTag) -eq "v9.9.9"
     }
 
+    # These three test Get-VersionFromReleaseJson directly with literal
+    # content rather than going through Resolve-AbmTag's file:// fetch:
+    # PowerShell 7+'s Invoke-WebRequest/Invoke-RestMethod (HttpClient-based)
+    # doesn't support the file:// scheme at all (unlike Windows PowerShell
+    # 5.1's legacy implementation), which would make these untestable
+    # without a real HTTP server. The actual HTTPS fetch path is exercised
+    # for real by the project's documented end-to-end install test instead.
     Invoke-Case "RELEASE.json resolution returns its version field" {
-        $AbmVersion = "auto"
-        $ReleaseJsonUrl = ToFileUrl $releaseJsonPath
-        (Resolve-AbmTag) -eq "v0.9.0-rc.1"
+        $content = Get-Content $releaseJsonPath -Raw
+        (Get-VersionFromReleaseJson $content) -eq "v0.9.0-rc.1"
     }
 
     Invoke-Case "install.ps1 never depends on GitHub's /releases/latest" {
@@ -80,15 +84,13 @@ try {
     }
 
     Invoke-Case "malformed RELEASE.json resolves to null, not a crash" {
-        $AbmVersion = "auto"
-        $ReleaseJsonUrl = ToFileUrl $malformedJsonPath
-        $null -eq (Resolve-AbmTag)
+        $content = Get-Content $malformedJsonPath -Raw
+        $null -eq (Get-VersionFromReleaseJson $content)
     }
 
     Invoke-Case "RELEASE.json missing the version field resolves to null" {
-        $AbmVersion = "auto"
-        $ReleaseJsonUrl = ToFileUrl $noVersionJsonPath
-        $null -eq (Resolve-AbmTag)
+        $content = Get-Content $noVersionJsonPath -Raw
+        $null -eq (Get-VersionFromReleaseJson $content)
     }
 
     Invoke-Case "unreachable RELEASE.json resolves to null" {
@@ -98,21 +100,29 @@ try {
     }
 
     Invoke-Case "the real repo RELEASE.json is valid and resolves to a tag" {
-        $AbmVersion = "auto"
-        $ReleaseJsonUrl = ToFileUrl (Join-Path $RepoRoot "RELEASE.json")
-        (Resolve-AbmTag) -like "v*"
+        $content = Get-Content (Join-Path $RepoRoot "RELEASE.json") -Raw
+        (Get-VersionFromReleaseJson $content) -like "v*"
     }
 
+    # Run from $FIXTURE_DIR, not the repo checkout: Install-Abm's "build from
+    # local source" fallback (if .\cmd\abm\main.go exists and `go` is on
+    # PATH) must not take priority over this test -- and would, inside a
+    # real checkout, since GitHub's windows-latest runners ship Go
+    # pre-installed regardless of whether this workflow job calls
+    # actions/setup-go.
     Invoke-Case "Install-Abm fails with the controlled message, never a raw API dump" {
         $AbmVersion = "auto"
         $ReleaseJsonUrl = "file:///no/such/path.json"
         $threw = $false
         $message = ""
+        Push-Location $FixtureDir
         try {
             Install-Abm $FixtureDir
         } catch {
             $threw = $true
             $message = $_.Exception.Message
+        } finally {
+            Pop-Location
         }
         $threw -and ($message -like "*No Auto-Backup-Manager release is available for this channel.*")
     }

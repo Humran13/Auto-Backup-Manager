@@ -53,17 +53,34 @@ $ConfigDir = "C:\ProgramData\Auto-Backup-Manager"
 # ephemeral GitHub Actions artifact URL. Returns the resolved tag, or $null
 # on failure -- callers must check for that and fail with their own clear
 # message rather than exposing a raw API response.
-function Resolve-AbmTag {
-    if ($AbmVersion -ne "auto") {
-        return $AbmVersion
-    }
+# Get-VersionFromReleaseJson parses RELEASE.json's content (already fetched,
+# as a string) and extracts its "version" field, or returns $null for
+# malformed JSON or a missing field. Split out from Resolve-AbmTag so this
+# parsing logic is unit-testable with a literal string, independent of
+# however the content was fetched -- Invoke-RestMethod's HttpClient-based
+# implementation on PowerShell 7+ doesn't support file:// URIs at all
+# (unlike Windows PowerShell 5.1's legacy WebRequest-based one), which would
+# otherwise make the happy-path untestable without a real HTTP server.
+function Get-VersionFromReleaseJson($Json) {
     try {
-        $release = Invoke-RestMethod -Uri $ReleaseJsonUrl -UseBasicParsing
+        $release = $Json | ConvertFrom-Json
     } catch {
         return $null
     }
     if (-not $release.version) { return $null }
     return $release.version
+}
+
+function Resolve-AbmTag {
+    if ($AbmVersion -ne "auto") {
+        return $AbmVersion
+    }
+    try {
+        $json = (Invoke-WebRequest -Uri $ReleaseJsonUrl -UseBasicParsing).Content
+    } catch {
+        return $null
+    }
+    return Get-VersionFromReleaseJson $json
 }
 
 # Get-VerifiedFile downloads $Url and its published checksum file, and

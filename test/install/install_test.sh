@@ -108,9 +108,14 @@ test_unreachable_release_json_resolves_empty() {
 }
 
 # --- test: install_abm fails with the controlled message, not a raw API dump
+# Run from $FIXTURE_DIR, not the repo checkout: install_abm's "build from
+# local source" fallback (if ./cmd/abm/main.go exists and `go` is on PATH)
+# must not take priority over this test -- and would, inside a real
+# checkout, since GitHub's ubuntu-latest runners ship Go pre-installed
+# regardless of whether this workflow job calls actions/setup-go.
 test_install_abm_fails_cleanly_when_unresolvable() {
   local out
-  out="$(ABM_INSTALL_TESTING=1 RELEASE_JSON_URL="file:///no/such/path.json" \
+  out="$(cd "$FIXTURE_DIR" && ABM_INSTALL_TESTING=1 RELEASE_JSON_URL="file:///no/such/path.json" \
     bash -c 'source "'"$REPO_ROOT"'/install.sh"; install_abm' 2>&1)" && return 1
   echo "$out" | grep -q "No Auto-Backup-Manager release is available for this channel."
 }
