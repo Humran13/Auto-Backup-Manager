@@ -44,6 +44,15 @@ test('rendered GUI completes setup, backup, recovery browsing, and safe restore'
   const consoleErrors = [];
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   page.on('pageerror', error => consoleErrors.push(error.message));
+  let delayedInitialBrowserLoad = false;
+  await page.route('**/api/files', async route => {
+    const url = new URL(route.request().url());
+    if (!url.searchParams.has('path') && !delayedInitialBrowserLoad) {
+      delayedInitialBrowserLoad = true;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    await route.continue();
+  });
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Welcome to Auto-Backup-Manager' })).toBeVisible();
@@ -190,6 +199,7 @@ test('provider, database, settings, and empty-state workflows are graphical', as
   await page.goto('/#/jobs');
   await expect(page.getByRole('heading', { name: 'Backup Jobs', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Create Job' }).click();
+  await expect(page.locator('#j-db-enabled')).toBeVisible();
   await page.locator('#j-db-enabled').check();
   await expect(page.locator('#j-db-fields')).toBeVisible();
   await page.locator('#j-db-kind').selectOption('sqlite');

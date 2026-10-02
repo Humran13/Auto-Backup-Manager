@@ -68,6 +68,7 @@ function showServerBrowser(options) {
   options = options || {};
   const selected = new Set(asArray(options.selected));
   let current = options.start || '';
+  let loadSequence = 0;
   showModal(`
     <h2>${esc(options.title || 'Choose folders on this server')}</h2>
     <p class="field-hint">This browser shows the filesystem of the machine running Auto-Backup-Manager.</p>
@@ -85,9 +86,11 @@ function showServerBrowser(options) {
     document.querySelectorAll('[data-remove-path]').forEach(b => b.addEventListener('click', () => { selected.delete(b.dataset.removePath); renderSelected(); }));
   };
   const load = async path => {
+    const sequence = ++loadSequence;
     const alertEl = document.getElementById('fb-alert');
     try {
       const data = await api('/api/files' + (path ? '?path=' + encodeURIComponent(path) : ''));
+      if (sequence !== loadSequence) return;
       current = data.path;
       document.getElementById('fb-path').value = current;
       document.getElementById('fb-up').disabled = !data.parent;
@@ -104,7 +107,7 @@ function showServerBrowser(options) {
       document.querySelectorAll('[data-open-path]').forEach(b => b.addEventListener('click', () => load(b.dataset.openPath)));
       document.querySelectorAll('[data-select-path]').forEach(b => b.addEventListener('change', e => { if (e.target.checked) selected.add(e.target.dataset.selectPath); else selected.delete(e.target.dataset.selectPath); renderSelected(); }));
       alertEl.innerHTML = '';
-    } catch (e) { alertEl.innerHTML = alertBox(e.message); }
+    } catch (e) { if (sequence === loadSequence) alertEl.innerHTML = alertBox(e.message); }
   };
   document.getElementById('fb-up').addEventListener('click', e => { if (e.currentTarget.dataset.parent) load(e.currentTarget.dataset.parent); });
   document.getElementById('fb-go').addEventListener('click', () => load(document.getElementById('fb-path').value.trim()));
