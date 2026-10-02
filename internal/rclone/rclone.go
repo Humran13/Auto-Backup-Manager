@@ -13,8 +13,33 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
+	"regexp"
+	"sync"
 )
+
+var authURLPattern = regexp.MustCompile(`https?://127\.0\.0\.1:[0-9]+/auth\?state=[A-Za-z0-9_-]+`)
+
+type authURLWriter struct {
+	mu       sync.Mutex
+	buffer   bytes.Buffer
+	onURL    func(string)
+	reported string
+}
+
+func (w *authURLWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, _ = w.buffer.Write(p)
+	if match := authURLPattern.FindString(w.buffer.String()); match != "" && match != w.reported {
+		w.reported = match
+		if w.onURL != nil {
+			w.onURL(match)
+		}
+	}
+	return len(p), nil
+}
 
 // Runner executes rclone against a specific config file, keeping every
 // device's rclone.conf (which holds OAuth tokens) isolated and under OS
@@ -104,14 +129,23 @@ func trimNewline(s string) string {
 // once the administrator completes the flow. The caller writes that token
 // into the remote's config; it is never persisted by this package directly.
 func (r *Runner) AuthorizeOAuth(ctx context.Context, providerType, clientID, clientSecret string) (tokenJSON string, err error) {
+	return r.AuthorizeOAuthProgress(ctx, providerType, clientID, clientSecret, nil)
+}
+
+// AuthorizeOAuthProgress is AuthorizeOAuth plus a callback for the temporary
+// local authorization URL. Desktop installs open it automatically; the GUI
+// also displays it so the flow remains visible and testable.
+func (r *Runner) AuthorizeOAuthProgress(ctx context.Context, providerType, clientID, clientSecret string, onURL func(string)) (tokenJSON string, err error) {
 	args := []string{"authorize", providerType}
 	if clientID != "" {
 		args = append(args, clientID, clientSecret)
 	}
-	cmd := exec.CommandContext(ctx, r.binary(), args...)
+	full := append([]string{"--config", r.ConfigPath}, args...)
+	cmd := exec.CommandContext(ctx, r.binary(), full...)
 	var stdout, stderr bytes.Buffer
+	watcher := &authURLWriter{onURL: onURL}
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stderr = io.MultiWriter(&stderr, watcher)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("rclone authorize %s: %w: %s", providerType, err, stderr.String())
 	}
@@ -138,6 +172,20 @@ func (r *Runner) CreateOAuthRemote(ctx context.Context, name, providerType, clie
 	}
 	if tokenJSON != "" {
 		args = append(args, "token", tokenJSON)
+	}
+	_, err := r.run(ctx, args...)
+	return err
+}
+
+// CreateRemote configures a non-OAuth backend such as MEGA from fields
+// collected by ABM's graphical provider form. rclone obscures password
+// values before writing its protected config file.
+func (r *Runner) CreateRemote(ctx context.Context, name, providerType string, values map[string]string) error {
+	args := []string{"config", "create", name, providerType, "--non-interactive", "--obscure"}
+	for key, value := range values {
+		if value != "" {
+			args = append(args, key, value)
+		}
 	}
 	_, err := r.run(ctx, args...)
 	return err

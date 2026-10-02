@@ -98,6 +98,21 @@ func (g *guiServer) handleStorageAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Direct-login rclone providers are configured by ABM itself after all
+	// required fields validate. The user never sees an rclone remote name.
+	if p.Backend == provider.BackendRclone && p.Auth == provider.AuthUserPass && options["remote"] == "" {
+		remote := safeRemoteName(req.Name)
+		values := map[string]string{}
+		if req.Provider == "mega" {
+			values["user"] = options["username"]
+			values["pass"] = secretVals["password"]
+		}
+		if err := rcloneRunner().CreateRemote(r.Context(), remote, p.RcloneBackend, values); err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, "connection failed: "+err.Error())
+			return
+		}
+		options["remote"] = remote
+	}
 
 	storage := config.Storage{Name: req.Name, Provider: req.Provider, Options: options, Immutable: req.Immutable}
 

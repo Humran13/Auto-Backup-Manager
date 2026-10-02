@@ -117,7 +117,6 @@ func buildRegistry() []Provider {
 		Backend: BackendRclone, RcloneBackend: "mega",
 		Maturity: MaturitySupported, Auth: AuthUserPass, Headless: HeadlessDirect,
 		RequiredFields: []CredentialField{
-			rcloneRemoteField(),
 			{Key: "username", Label: "MEGA account email", Required: true},
 			{Key: "password", Label: "MEGA account password", Secret: true, Required: true},
 		},
@@ -256,12 +255,12 @@ func buildRegistry() []Provider {
 		OptionalFields: []CredentialField{
 			{Key: "port", Label: "Port", Default: "22"},
 			{Key: "key_file", Label: "SSH private key file (preferred)"},
-			{Key: "password", Label: "Password (discouraged; prefer a key)", Secret: true},
 			{Key: "path_prefix", Label: "Remote path prefix"},
 		},
 		DocPath: "docs/providers/SFTP.md",
 		KnownLimitations: []string{
 			"Uses restic's native sftp backend directly (via the system `ssh`/`sftp` client), not rclone -- simpler and one less moving part for a backend restic has supported natively since its earliest releases.",
+			"Unattended backups require an SSH key or agent; password-only SSH is not offered because it would require an interactive prompt or an additional password-injection helper.",
 			"Host key verification is never silently disabled; the host must already be a known host for the account running abm (or configured via SSH config), exactly as plain `sftp`/`ssh` would require.",
 		},
 	})

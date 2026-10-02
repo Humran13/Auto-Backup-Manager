@@ -158,6 +158,46 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -v
 
+  browser-linux:
+    name: Rendered browser acceptance (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install restic and browser dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run real rendered-browser acceptance
+        run: npm run test:browser
+
+  browser-windows:
+    name: Rendered browser acceptance (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install restic
+        run: choco install -y restic
+      - run: npm ci
+      - run: npx playwright install chromium
+      - name: Run real rendered-browser acceptance
+        run: npm run test:browser
+
   shellcheck:
     name: ShellCheck (install.sh)
     runs-on: ubuntu-latest

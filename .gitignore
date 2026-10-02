@@ -11,10 +11,17 @@ secrets.yaml
 *.key
 *.pem
 /test/tmp/
+/test/.tmp-browser-home*/
+/test/.tmp-browser-data*/
+/test-results/
+/playwright-report/
 /.abm-dev/
 
 # Go
 /vendor/
+
+# Browser test dependencies
+/node_modules/
 
 # OS
 .DS_Store

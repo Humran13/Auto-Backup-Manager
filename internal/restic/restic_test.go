@@ -1,6 +1,7 @@
 package restic
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -72,6 +73,17 @@ func TestIsAlreadyInitialized(t *testing.T) {
 		if got != want {
 			t.Errorf("isAlreadyInitialized(%q) = %v, want %v", msg, got, want)
 		}
+	}
+}
+
+func TestWindowsTimestampOnlyRestoreError(t *testing.T) {
+	metadataOnly := fmt.Errorf(`restic restore: exit status 1: failed to restore timestamp of "C:\\target\\C\\Users": Access is denied. Fatal: There were 1 errors`)
+	if !isWindowsTimestampOnlyRestoreError(metadataOnly) {
+		t.Fatal("expected timestamp-only restore error to be recognized")
+	}
+	contentFailure := fmt.Errorf(`failed to restore timestamp; verification failed for file.txt`)
+	if isWindowsTimestampOnlyRestoreError(contentFailure) {
+		t.Fatal("content verification failures must remain fatal")
 	}
 }
 

@@ -161,25 +161,24 @@ session -- `adobe/s3mock` was substituted as a freely-pullable alternative.
   a real child process with its own isolated `ABM_HOME` (via `exec.Cmd.Env`)
   is the only way to exercise the GUI's actual on-disk behavior from a
   different test package.
-- **What was not tested**: no pixel-level/headless-browser (e.g. Playwright)
-  testing was performed, and the frontend was never opened in an actual
-  browser window during this development session either -- only driven via
-  curl and the automated HTTP-based tests above. The HTML/CSS/JS is
-  therefore unverified at the rendering/visual level; what is verified is
-  every API call the frontend's `app.js` makes (CSRF, path-traversal,
-  secret-redaction, and error-handling correctness all depend on the
-  HTTP/API layer, not on how it's drawn). Opening the GUI in a real browser
-  and clicking through each page is an explicit remaining task before
-  trusting the visual layer. A real bug was found and fixed via the
-  automated tests regardless: `defaultRestoreTarget`
-  originally used second-granularity timestamps for its directory name, so
-  two restores started within the same second (easy to trigger
-  automatically, plausible for a user double-clicking restore) collided
-  into the same directory; since restic's restore never deletes stale files
-  left over from a prior restore into the same target, a second restore
-  could appear to still contain files only an earlier, different snapshot
-  actually had. Fixed with `os.MkdirTemp` for guaranteed uniqueness,
-  verified by running the full test suite three times in a row.
+- **Rendered browser tests** (`test/browser`, Playwright Chromium): start a
+  fresh real ABM process and fail on every browser console error/page
+  exception. They complete the onboarding wizard, organization/device setup,
+  graphical server browsing, two-source selection, local destination probe,
+  first backup, file modification/add/delete, second backup, recovery-point
+  listing/content browsing, recovery manifest, deletion of both original
+  sources, old-version restore and latest-version safe restore with byte
+  checks, and the double-confirmed original-location restore back to both
+  configured sources with byte checks.
+  Additional rendered tests cover null API lists, Google/OneDrive/Dropbox
+  OAuth UI, MEGA/S3/SFTP forms and password masking, database forms, settings,
+  and the no-storage redirect. These tests found and fixed wizard state loss,
+  human-name validation mismatch, a restore-version loading race, and a
+  Windows multi-source timestamp-only restore failure.
+- **Cloud auth boundary**: public CI does not possess real Google/Microsoft/
+  Dropbox credentials. It tests the graphical fields and OAuth orchestration
+  boundary, not a fake successful provider login. Real-account tests remain
+  optional and credential-gated.
 
 ## Manual testing performed during development
 
@@ -366,21 +365,19 @@ before being wired into CI.
   was exercised only on a healthy repository; deliberately corrupting a
   repository to confirm `check` catches it was not attempted.
 
-## Known functional gaps (not bugs — not yet built)
+## Known functional gaps
 
-- No fully interactive, single-flow setup wizard chaining provider category
-  → provider → auth → job → first backup → test restore → schedule in one
-  guided terminal session; `abm setup` bootstraps device identity/config and
-  `abm storage providers`/`abm storage add`/`abm job add` are separate,
-  scriptable steps. The spec's 16-step wizard concept is not implemented as
-  one flow.
-- No interactive restore browser (choose job → browse snapshot contents →
-  preview → restore); `abm snapshots` + `abm restore --include` cover the
-  same ground non-interactively.
+- OAuth completion on a headless VPS is constrained by each provider and
+  rclone's localhost callback behavior. The GUI never claims connection until
+  rclone returns a real token; provider-specific limitations remain visible.
+- Cloud destination folder browsing/creation is not yet exposed for every
+  rclone provider; ABM uses its human-readable organization/device/job layout
+  beneath the connected remote root.
 - No automated disaster-recovery inventory command; see
   [DISASTER-RECOVERY.md](DISASTER-RECOVERY.md) for the manual commands to
   run instead.
-- No automated database/Docker-bind-mount auto-detection.
+- Docker Compose inspection handles short-syntax bind mounts, compose files,
+  and `.env`; long-syntax mounts and named-volume quiescing remain manual.
 - `rest-server --append-only` (restic's own recommended separate-maintenance-
   authority design for ransomware resistance) is documented as the
   recommended hardened architecture in [IMMUTABILITY.md](docs/IMMUTABILITY.md)

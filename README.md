@@ -8,8 +8,8 @@ backs up on an hourly schedule, keeps 10 days of hourly recovery points by
 default, supports 25+ storage providers through a scalable provider
 registry, and survives reboots and temporary network/cloud outages.
 
-> **Status:** pre-1.0 foundation. The core backup/restore/retention/
-> multi-destination engine is implemented and tested end to end, including
+> **Status:** pre-1.0 release candidate. The selective backup/restore/retention/
+> multi-destination engine and graphical onboarding are implemented and tested end to end, including
 > real protocol-level round-trips against S3 and SFTP test servers (see
 > [docs/TESTING.md](docs/TESTING.md)). Most cloud providers are implemented
 > and documented but not yet validated against a real account (they are
@@ -53,8 +53,9 @@ preset, another rclone remote) is a registry entry in
 `internal/provider/registry.go` — no change to backup, retention,
 scheduling, or restore logic. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Scheduling is OS-native, not a resident daemon: a systemd timer on Linux, a
-Task Scheduler task (running as SYSTEM) on Windows.
+Backup scheduling is OS-native: a systemd timer on Linux and a Task Scheduler
+task (running as SYSTEM) on Windows. A separate localhost-only GUI service is
+started at boot so ordinary configuration remains graphical.
 
 ## Install
 
@@ -76,45 +77,36 @@ touch an existing config, secrets, or backup repository. Neither script ever
 queries GitHub's `/releases/latest` API (it 404s for a repo with no stable
 release, and never returns a prerelease even once one exists) -- they
 resolve the exact approved version from [RELEASE.json](RELEASE.json)
-instead. To pin a specific version yourself: `ABM_VERSION=v0.9.0-rc.1 curl
+instead. To pin a specific version yourself: `ABM_VERSION=v0.9.2-rc.1 curl
 ... | sudo bash` (Linux) or `irm ... -OutFile install.ps1; .\install.ps1
--AbmVersion v0.9.0-rc.1` (Windows, since piping to `iex` can't pass
+-AbmVersion v0.9.2-rc.1` (Windows, since piping to `iex` can't pass
 parameters). See [docs/UBUNTU.md](docs/UBUNTU.md) and
 [docs/WINDOWS.md](docs/WINDOWS.md) for
-the safer download-then-inspect install method and platform specifics.
+the safer download-then-inspect install method and platform specifics. The
+installer starts the local GUI automatically. Windows opens the setup wizard;
+Linux starts a localhost-only systemd service and prints the secure SSH-tunnel
+access instruction for a VPS. No `abm setup`, `abm gui`, or `rclone config`
+command is part of the normal setup path.
 
 ## Quick start
 
-```bash
-abm setup
-abm storage providers                  # see every supported provider and its maturity
-abm storage add --provider generic-s3 --name backblaze --endpoint <url> --access-key <key> --secret-key <secret>
-abm job add --name my-job --source /var/www --destination backblaze
-abm backup now my-job
-abm snapshots my-job
-abm schedule set
-```
-
-A job can target more than one destination for redundancy:
-
-```bash
-abm job add --name my-job --source /var/www \
-    --destination backblaze --destination local-disk \
-    --policy primary-required   # default: a secondary failing degrades, doesn't fail, the run
-```
+Run the one-line installer above, then use the browser wizard to name the
+organization/device, select multiple server folders, connect storage, choose
+retention, test the destination, run the first backup, and verify a recovery
+point. Advanced CLI commands remain available for automation but are not
+required for ordinary setup.
 
 ## Web GUI
 
-A local, professional web interface is available as an alternative to the
-CLI — same engine underneath, not a separate implementation:
+A local web interface is the normal product workflow — same engine underneath,
+not a separate implementation:
 
 ```bash
 abm gui
 ```
 
-Opens `http://127.0.0.1:8765` (your default browser launches automatically
-on Windows; on Linux the URL is printed, and opened too if a desktop browser
-is available). If it's your first run, a setup wizard appears automatically.
+The installer starts it at `http://127.0.0.1:8765` (and opens it on Windows).
+If it's your first run, the complete setup wizard appears automatically.
 The GUI binds to `127.0.0.1` only — it is never exposed on a public or LAN
 interface — and every operation it performs calls the exact same Go
 functions the CLI commands do (`internal/job`, `internal/backend`,
@@ -122,8 +114,8 @@ functions the CLI commands do (`internal/job`, `internal/backend`,
 possible through the GUI that isn't also possible through the CLI, and
 nothing shells out to `abm` itself. See
 [docs/GUI.md](docs/GUI.md) for the full page-by-page walkthrough and current
-limitations (e.g. cloud-drive OAuth providers still need `rclone config` run
-once outside the GUI).
+limitations. Google Drive, OneDrive, and Dropbox authorization is orchestrated
+inside the GUI; normal users do not run `rclone config`.
 
 ```
 abm gui --port 9000      # use a different port

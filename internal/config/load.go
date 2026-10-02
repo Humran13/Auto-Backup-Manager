@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -14,6 +16,23 @@ import (
 // rclone-path-friendly characters, since they end up embedded in repository
 // paths and file names.
 var validNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// validJobName accepts the human-readable project names shown throughout the
+// GUI while still being safe in state/lock filenames and repository paths.
+func validJobName(name string) bool {
+	if name == "" || utf8.RuneCountInString(name) > 64 || strings.TrimSpace(name) != name {
+		return false
+	}
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\\<>:"|?*`) {
+		return false
+	}
+	for _, ch := range name {
+		if ch < 32 || ch == 127 {
+			return false
+		}
+	}
+	return true
+}
 
 // Load reads and validates a config file from path. It never returns a
 // Config that failed validation, so callers can trust the result outright.
@@ -112,7 +131,7 @@ func Validate(cfg *Config) error {
 	// actually need work to do (backup/maintain) check len(cfg.Jobs)
 	// themselves and report a clear "nothing configured" message.
 	for name, job := range cfg.Jobs {
-		if !validNameRE.MatchString(name) {
+		if !validJobName(name) {
 			return fmt.Errorf("job %q: invalid job name", name)
 		}
 		if err := validateJob(name, job, storageNames); err != nil {

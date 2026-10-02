@@ -178,6 +178,16 @@ function Install-Abm($TmpDir) {
     Copy-Item (Join-Path $TmpDir "abm.exe") $abmPath -Force
 }
 
+function Install-GuiStartupTask {
+    $abmPath = Join-Path $BinDir "abm.exe"
+    $action = New-ScheduledTaskAction -Execute $abmPath -Argument "gui --no-open"
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    Register-ScheduledTask -TaskName "Auto-Backup-Manager-GUI" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Auto-Backup-Manager local management GUI" -Force | Out-Null
+    Start-ScheduledTask -TaskName "Auto-Backup-Manager-GUI"
+}
+
 function Install-Main {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -202,6 +212,7 @@ function Install-Main {
         Install-Restic $TmpDir
         Install-Rclone $TmpDir
         Install-Abm $TmpDir
+        Install-GuiStartupTask
 
         # Add BinDir to the machine PATH if not already present.
         $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -212,13 +223,10 @@ function Install-Main {
 
         Write-Log "install complete."
         Write-Log ""
-        Write-Log "Next steps (new elevated PowerShell window so PATH updates):"
-        Write-Log "  abm setup"
-        Write-Log "  abm storage providers"
-        Write-Log "  abm storage add --provider <id> --name <name> ..."
-        Write-Log "  abm job add --name my-job --source C:\Data --destination <name>"
-        Write-Log "  abm backup now my-job"
-        Write-Log "  abm schedule set"
+        Write-Log "Opening the graphical setup wizard at http://127.0.0.1:8765"
+        Start-Sleep -Seconds 2
+        Start-Process "http://127.0.0.1:8765"
+        Write-Log "All configuration now continues in the browser; no additional command is required."
         Write-Log ""
         Write-Log "Uninstalling later ('abm uninstall') removes only the scheduled"
         Write-Log "task; it never deletes config, secrets, or backup repositories."

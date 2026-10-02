@@ -7,6 +7,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +17,92 @@ import (
 	"github.com/Humran13/Auto-Backup-Manager/internal/config"
 	"github.com/Humran13/Auto-Backup-Manager/internal/provider"
 )
+
+func TestValidateOriginalSources_AllSupportedLayouts(t *testing.T) {
+	tests := []struct {
+		name    string
+		goos    string
+		sources []string
+		wantErr bool
+	}{
+		{name: "single Linux source", goos: "linux", sources: []string{"/opt/app"}},
+		{name: "multiple Linux sources", goos: "linux", sources: []string{"/opt/app", "/var/lib/app"}},
+		{name: "single Windows source", goos: "windows", sources: []string{`C:\apps\one`}},
+		{name: "multiple Windows sources same drive", goos: "windows", sources: []string{`C:\apps\one`, `c:\data\two`}},
+		{name: "multiple Windows sources different drives", goos: "windows", sources: []string{`C:\apps`, `D:\data`}},
+		{name: "empty manifest", goos: "linux", wantErr: true},
+		{name: "relative Unix", goos: "linux", sources: []string{"var/data"}, wantErr: true},
+		{name: "Unix traversal", goos: "linux", sources: []string{"/opt/../etc"}, wantErr: true},
+		{name: "relative Windows", goos: "windows", sources: []string{`data\app`}, wantErr: true},
+		{name: "Windows traversal", goos: "windows", sources: []string{`C:\apps\..\Windows`}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateOriginalSources(test.goos, test.sources)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateOriginalSources() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateSafeRestoreTarget_RemainsSeparate(t *testing.T) {
+	if err := validateSafeRestoreTarget("linux", "/restore/job", []string{"/srv/app", "/var/data"}); err != nil {
+		t.Fatalf("separate safe target rejected: %v", err)
+	}
+	for _, target := range []string{"/srv/app", "/srv/app/recovered", "/srv", "/tmp/../srv/app"} {
+		if err := validateSafeRestoreTarget("linux", target, []string{"/srv/app"}); err == nil {
+			t.Errorf("unsafe target %q was accepted", target)
+		}
+	}
+	if err := validateSafeRestoreTarget("windows", `D:\Recovered`, []string{`C:\apps`, `D:\data`}); err != nil {
+		t.Fatalf("separate Windows target rejected: %v", err)
+	}
+	if err := validateSafeRestoreTarget("windows", `C:\apps\..\Windows`, []string{`C:\apps`}); err == nil {
+		t.Fatal("Windows traversal target was accepted")
+	}
+}
+
+func TestRestoreOriginalSources_WritesIntendedLocation(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "original", "source")
+	if err := os.MkdirAll(destination, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "changed.txt"), []byte("newer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	var stagedSource string
+	if runtime.GOOS == "windows" {
+		drive := strings.TrimSuffix(filepath.VolumeName(destination), ":")
+		tail := strings.TrimPrefix(destination[len(filepath.VolumeName(destination)):], string(os.PathSeparator))
+		stagedSource = filepath.Join(staging, drive, tail)
+	} else {
+		stagedSource = filepath.Join(staging, strings.TrimPrefix(destination, string(os.PathSeparator)))
+	}
+	if err := os.MkdirAll(stagedSource, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedSource, "changed.txt"), []byte("from recovery point"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedSource, "restored.txt"), []byte("restored"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreOriginalSources(runtime.GOOS, staging, []string{destination}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"changed.txt": "from recovery point", "restored.txt": "restored"} {
+		got, err := os.ReadFile(filepath.Join(destination, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("original path %s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	missingSource := filepath.Join(filepath.Dir(destination), "not-selected")
+	if err := restoreOriginalSources(runtime.GOOS, staging, []string{destination, missingSource}); err != nil {
+		t.Fatalf("an unselected source absent from staging must be skipped: %v", err)
+	}
+}
 
 func TestNewCSRFToken_Unique(t *testing.T) {
 	a := newCSRFToken()

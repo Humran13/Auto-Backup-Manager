@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 
@@ -32,6 +33,8 @@ type databaseView struct {
 	Port           int    `json:"port,omitempty"`
 	CredentialsRef string `json:"credentialsRef,omitempty"`
 	Path           string `json:"path,omitempty"`
+	Username       string `json:"username,omitempty"`
+	Password       string `json:"password,omitempty"`
 }
 
 func toJobView(name string, j config.Job) jobView {
@@ -132,10 +135,22 @@ func (g *guiServer) handleJobUpsert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var dbs []config.Database
-	for _, d := range req.Databases {
+	for i, d := range req.Databases {
+		credentialsRef := d.CredentialsRef
+		if d.Kind != string(config.DatabaseSQLite) {
+			credentialsRef = fmt.Sprintf("%s-db-%d", req.Name, i+1)
+			if d.Username == "" || d.Password == "" {
+				writeErr(w, http.StatusBadRequest, "database username and password are required")
+				return
+			}
+			if err := g.app.dbSecrets.Set(credentialsRef, d.Username+":"+d.Password); err != nil {
+				writeErr(w, http.StatusInternalServerError, "storing database credential: "+err.Error())
+				return
+			}
+		}
 		dbs = append(dbs, config.Database{
 			Kind: config.DatabaseKind(d.Kind), Name: d.Name, Host: d.Host, Port: d.Port,
-			CredentialsRef: d.CredentialsRef, Path: d.Path,
+			CredentialsRef: credentialsRef, Path: d.Path,
 		})
 	}
 

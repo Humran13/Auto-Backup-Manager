@@ -139,6 +139,16 @@ func TestValidate_InvalidJobNameRejected(t *testing.T) {
 	}
 }
 
+func TestValidate_HumanReadableJobNameAllowed(t *testing.T) {
+	cfg := validBaseConfig()
+	j := cfg.Jobs["job1"]
+	delete(cfg.Jobs, "job1")
+	cfg.Jobs["Motion Ventures Website"] = j
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("human-readable job name should be valid: %v", err)
+	}
+}
+
 func TestValidate_FutureSchemaVersionRejected(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.Version = CurrentSchemaVersion + 1

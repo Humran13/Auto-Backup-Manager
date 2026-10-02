@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -37,25 +38,31 @@ data.`,
 				return fmt.Errorf("no such job %q", jobName)
 			}
 
-			if target == "" {
-				if !inPlace {
-					return fmt.Errorf("--target is required unless --in-place is given")
-				}
-				if len(job.Sources) != 1 {
-					return fmt.Errorf("--in-place requires --target when a job has more than one source")
-				}
-				target = job.Sources[0]
-			}
-
+			originalInPlace := false
 			if inPlace {
+				if target != "" {
+					return fmt.Errorf("--target cannot be combined with --in-place; original paths come from the recovery manifest")
+				}
+				if err := validateOriginalSources(runtime.GOOS, job.Sources); err != nil {
+					return err
+				}
 				if !yes {
-					fmt.Printf("This will restore %q into %s, OVERWRITING existing files. Continue? [y/N]: ", snapshotID, target)
+					fmt.Printf("This will restore %q to %v, OVERWRITING existing files. Continue? [y/N]: ", snapshotID, job.Sources)
 					reader := bufio.NewReader(os.Stdin)
 					line, _ := reader.ReadString('\n')
 					if strings.TrimSpace(strings.ToLower(line)) != "y" {
 						fmt.Println("aborted")
 						return nil
 					}
+				}
+				target = defaultRestoreTarget(jobName + "-original")
+				originalInPlace = true
+			} else {
+				if target == "" {
+					return fmt.Errorf("--target is required unless --in-place is given")
+				}
+				if err := validateSafeRestoreTarget(runtime.GOOS, target, job.Sources); err != nil {
+					return err
 				}
 			}
 
@@ -71,7 +78,17 @@ data.`,
 			}); err != nil {
 				return fmt.Errorf("restore failed: %w", err)
 			}
-			fmt.Printf("restored %s snapshot %s to %s\n", jobName, snapshotID, target)
+			if originalInPlace {
+				if err := restoreOriginalSources(runtime.GOOS, target, job.Sources); err != nil {
+					return fmt.Errorf("copying verified restore to original locations (staging retained at %s): %w", target, err)
+				}
+				_ = os.RemoveAll(target)
+			}
+			if inPlace {
+				fmt.Printf("restored %s snapshot %s to its configured original locations\n", jobName, snapshotID)
+			} else {
+				fmt.Printf("restored %s snapshot %s to %s\n", jobName, snapshotID, target)
+			}
 			return nil
 		},
 	}

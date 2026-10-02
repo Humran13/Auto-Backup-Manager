@@ -186,11 +186,14 @@ func (g *guiServer) routes() http.Handler {
 	mux.HandleFunc("GET /api/csrf", g.handleCSRF)
 	mux.HandleFunc("GET /api/status", g.handleStatus)
 	mux.HandleFunc("GET /api/providers", g.handleProviders)
+	mux.HandleFunc("GET /api/files", g.handleFilesBrowse)
+	mux.HandleFunc("GET /api/docker/inspect", g.handleDockerInspect)
 
 	mux.HandleFunc("GET /api/storage", g.handleStorageList)
 	mux.HandleFunc("POST /api/storage", g.handleStorageAdd)
 	mux.HandleFunc("POST /api/storage/test", g.handleStorageTest)
 	mux.HandleFunc("POST /api/storage/reconnect", g.handleStorageReconnect)
+	mux.HandleFunc("POST /api/storage/oauth/start", g.handleOAuthStart)
 	mux.HandleFunc("DELETE /api/storage/{name}", g.handleStorageRemove)
 
 	mux.HandleFunc("GET /api/jobs", g.handleJobsList)
@@ -198,8 +201,10 @@ func (g *guiServer) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/jobs/{name}", g.handleJobRemove)
 	mux.HandleFunc("POST /api/jobs/{name}/enable", g.handleJobEnable)
 	mux.HandleFunc("POST /api/jobs/{name}/run", g.handleJobRun)
+	mux.HandleFunc("POST /api/database/test", g.handleDatabaseTest)
 
 	mux.HandleFunc("GET /api/snapshots", g.handleSnapshots)
+	mux.HandleFunc("GET /api/recovery-point/contents", g.handleRecoveryPointContents)
 	mux.HandleFunc("POST /api/restore", g.handleRestore)
 
 	mux.HandleFunc("GET /api/schedule", g.handleScheduleShow)

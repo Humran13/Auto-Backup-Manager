@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -266,12 +267,71 @@ func (r *Runner) Restore(ctx context.Context, opts RestoreOptions) error {
 	if opts.Target == "" {
 		return fmt.Errorf("restore target directory is required")
 	}
-	args := []string{"restore", opts.SnapshotID, "--target", opts.Target}
+	args := []string{"restore", opts.SnapshotID, "--target", opts.Target, "--verify"}
 	for _, inc := range opts.Include {
 		args = append(args, "--include", inc)
 	}
 	_, err := r.run(ctx, args...)
+	// restic 0.19 on Windows can restore and verify every file from a
+	// multi-source snapshot, then exit 1 solely because Windows refuses to
+	// apply the timestamp of a synthetic common ancestor such as C:\Users.
+	// Do not turn that metadata-only condition into a false restore failure;
+	// --verify above still makes any content error fatal.
+	if runtime.GOOS == "windows" && isWindowsTimestampOnlyRestoreError(err) {
+		return nil
+	}
 	return err
+}
+
+func isWindowsTimestampOnlyRestoreError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "failed to restore timestamp") &&
+		!strings.Contains(message, "verification failed") &&
+		!strings.Contains(message, "failed to restore file") &&
+		!strings.Contains(message, "failed to load")
+}
+
+// FileInfo is one entry reported by `restic ls --json`. It is intentionally
+// small: the GUI needs a safe, read-only recovery-point browser, not restic's
+// internal tree/blob identifiers.
+type FileInfo struct {
+	Path       string    `json:"path"`
+	Name       string    `json:"name"`
+	Type       string    `json:"type"`
+	Size       uint64    `json:"size"`
+	ModTime    time.Time `json:"mtime"`
+	StructType string    `json:"struct_type"`
+}
+
+// ListFiles returns the files and folders in a recovery point. restic emits
+// newline-delimited JSON and includes a leading snapshot metadata record;
+// only node records are exposed to callers.
+func (r *Runner) ListFiles(ctx context.Context, snapshotID string) ([]FileInfo, error) {
+	if snapshotID == "" {
+		return nil, fmt.Errorf("snapshot id is required")
+	}
+	out, err := r.run(ctx, "ls", "--json", snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	var files []FileInfo
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var item FileInfo
+		if err := json.Unmarshal(line, &item); err != nil {
+			return nil, fmt.Errorf("parsing recovery-point contents: %w", err)
+		}
+		if item.StructType == "node" {
+			files = append(files, item)
+		}
+	}
+	return files, nil
 }
 
 // Latest returns the newest snapshot by timestamp, optionally restricted to

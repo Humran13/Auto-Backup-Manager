@@ -5,7 +5,7 @@
 | **Provider ID** | `sftp` |
 | **Maturity** | Stable |
 | **Backend** | restic's native `sftp` backend (not rclone) |
-| **Auth** | SSH key (preferred) or password |
+| **Auth** | SSH key or SSH agent |
 | **Headless** | Direct — no browser involved at all |
 
 Generic SFTP destination. Documented here using
@@ -24,8 +24,8 @@ fewer thing to misconfigure.
 
 - Hostname and port (Hetzner Storage Box: `<id>.your-storagebox.de`, port `23`)
 - Username
-- An SSH private key (**preferred**) or a password (supported, but
-  discouraged — see [../SECURITY.md](../SECURITY.md))
+- An SSH private key or agent identity. Password-only SSH is intentionally
+  not offered for unattended jobs because the native backend disables prompts.
 - The host must already be a known host for the account running `abm`
   (`ssh-keyscan`/a normal first `ssh` connection, or an SSH config entry) —
   ABM never silently disables host-key verification.
@@ -41,14 +41,6 @@ abm storage add --provider sftp --name storagebox \
 The private key file should be `chmod 600`, owned by root, and itself never
 committed to source control.
 
-## Setting it up (password — discouraged)
-
-```bash
-abm storage add --provider sftp --name storagebox \
-    --host u123456.your-storagebox.de --port 23 --user u123456
-# prompts for the password on stdin, never a command-line argument
-```
-
 ## Testing
 
 ```bash
@@ -57,8 +49,8 @@ abm storage test storagebox
 
 ## Reconnecting
 
-SSH keys/passwords for SFTP don't expire the way OAuth tokens do; there is
-nothing to "reconnect" unless the key is rotated or the password changes —
+SSH keys don't expire the way OAuth tokens do; there is
+nothing to "reconnect" unless the key is rotated —
 re-run `abm storage add` with the same `--name` to update it.
 
 ## Restore test

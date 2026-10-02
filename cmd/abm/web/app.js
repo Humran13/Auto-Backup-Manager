@@ -4,6 +4,9 @@
 'use strict';
 
 let CSRF = null;
+const asArray = value => Array.isArray(value) ? value : [];
+let pendingJobDraft = null;
+let pendingRestoreIncludes = [];
 
 async function api(path, opts) {
   opts = opts || {};
@@ -57,6 +60,62 @@ function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
 function alertBox(msg, kind) {
   return `<div class="alert alert-${kind || 'err'}">${esc(msg)}</div>`;
+}
+
+// Server-side path picker. Every entry comes from /api/files on the ABM
+// host, so managing a VPS never opens the administrator laptop's filesystem.
+function showServerBrowser(options) {
+  options = options || {};
+  const selected = new Set(asArray(options.selected));
+  let current = options.start || '';
+  showModal(`
+    <h2>${esc(options.title || 'Choose folders on this server')}</h2>
+    <p class="field-hint">This browser shows the filesystem of the machine running Auto-Backup-Manager.</p>
+    <div id="fb-alert"></div>
+    <div class="path-bar"><button class="secondary" id="fb-up">Up</button><input id="fb-path" type="text" aria-label="Server path"><button id="fb-go">Go</button></div>
+    <div id="fb-roots" class="toolbar"></div>
+    <div id="fb-entries" class="file-browser"></div>
+    <div><b>Selected</b><div id="fb-selected" class="selected-paths"></div></div>
+    <div class="modal-actions"><button class="secondary" id="fb-cancel">Cancel</button><button id="fb-done">Use selected</button></div>
+  `);
+  const renderSelected = () => {
+    document.getElementById('fb-selected').innerHTML = selected.size
+      ? [...selected].map(p => `<div class="selected-path"><span class="mono">${esc(p)}</span><button class="link danger-text" data-remove-path="${esc(p)}">Remove</button></div>`).join('')
+      : '<span class="muted">No folders selected yet.</span>';
+    document.querySelectorAll('[data-remove-path]').forEach(b => b.addEventListener('click', () => { selected.delete(b.dataset.removePath); renderSelected(); }));
+  };
+  const load = async path => {
+    const alertEl = document.getElementById('fb-alert');
+    try {
+      const data = await api('/api/files' + (path ? '?path=' + encodeURIComponent(path) : ''));
+      current = data.path;
+      document.getElementById('fb-path').value = current;
+      document.getElementById('fb-up').disabled = !data.parent;
+      document.getElementById('fb-up').dataset.parent = data.parent || '';
+      document.getElementById('fb-roots').innerHTML = asArray(data.roots).map(root => `<button class="secondary" data-root="${esc(root)}">${esc(root)}</button>`).join('');
+      document.querySelectorAll('[data-root]').forEach(b => b.addEventListener('click', () => load(b.dataset.root)));
+      document.getElementById('fb-entries').innerHTML = `
+        <div class="file-entry current"><label><input type="checkbox" id="fb-current" ${selected.has(current) ? 'checked' : ''}> Select this folder: <span class="mono">${esc(current)}</span></label></div>
+        ${asArray(data.entries).map(entry => `<div class="file-entry ${entry.isDir ? 'folder' : 'file'}">
+          ${entry.isDir ? `<button class="link" data-open-path="${esc(entry.path)}">📁 ${esc(entry.name)}</button>
+            <label><input type="checkbox" data-select-path="${esc(entry.path)}" ${selected.has(entry.path) ? 'checked' : ''}> select</label>` : `<span>📄 ${esc(entry.name)}</span>`}
+        </div>`).join('')}`;
+      document.getElementById('fb-current').addEventListener('change', e => { if (e.target.checked) selected.add(current); else selected.delete(current); renderSelected(); });
+      document.querySelectorAll('[data-open-path]').forEach(b => b.addEventListener('click', () => load(b.dataset.openPath)));
+      document.querySelectorAll('[data-select-path]').forEach(b => b.addEventListener('change', e => { if (e.target.checked) selected.add(e.target.dataset.selectPath); else selected.delete(e.target.dataset.selectPath); renderSelected(); }));
+      alertEl.innerHTML = '';
+    } catch (e) { alertEl.innerHTML = alertBox(e.message); }
+  };
+  document.getElementById('fb-up').addEventListener('click', e => { if (e.currentTarget.dataset.parent) load(e.currentTarget.dataset.parent); });
+  document.getElementById('fb-go').addEventListener('click', () => load(document.getElementById('fb-path').value.trim()));
+  document.getElementById('fb-cancel').addEventListener('click', closeModal);
+  document.getElementById('fb-done').addEventListener('click', () => {
+    if (!selected.size) { document.getElementById('fb-alert').innerHTML = alertBox('Select at least one folder.'); return; }
+    const result = options.multiple === false ? [[...selected][selected.size - 1]] : [...selected];
+    closeModal();
+    options.onDone(result);
+  });
+  renderSelected(); load(current);
 }
 
 // ---------------------------------------------------------------------
@@ -116,10 +175,13 @@ async function renderDashboard(view, status) {
     api('/api/doctor').catch(() => []),
   ]);
 
-  const jobCount = status.jobs.length;
-  const lastSuccesses = status.jobs.filter(j => j.lastSuccess).sort((a, b) => b.lastSuccess.localeCompare(a.lastSuccess));
-  const lastFailed = status.jobs.filter(j => j.lastError);
-  const errCount = doctorChecks.filter(c => c.status === 'error').length;
+  const jobs = asArray(status && status.jobs);
+  const stores = asArray(storage);
+  const checks = asArray(doctorChecks);
+  const jobCount = jobs.length;
+  const lastSuccesses = jobs.filter(j => j.lastSuccess).sort((a, b) => b.lastSuccess.localeCompare(a.lastSuccess));
+  const lastFailed = jobs.filter(j => j.lastError);
+  const errCount = checks.filter(c => c.status === 'error').length;
 
   view.innerHTML = `
     <h1>Dashboard</h1>
@@ -131,13 +193,13 @@ async function renderDashboard(view, status) {
     </div>
     <div class="grid">
       <div class="card stat"><div class="label">Device</div><div class="value">${esc(status.deviceName)}</div></div>
-      <div class="card stat"><div class="label">Jobs configured</div><div class="value">${jobCount}</div></div>
-      <div class="card stat"><div class="label">Storage destinations</div><div class="value">${storage.length}</div></div>
+      <div class="card stat"><div class="label">Protected projects</div><div class="value">${jobCount}</div></div>
+      <div class="card stat"><div class="label">Storage destinations</div><div class="value">${stores.length}</div></div>
       <div class="card stat"><div class="label">System health</div><div class="value">${errCount === 0 ? badge('Healthy', 'ok') : badge(errCount + ' issue(s)', 'err')}</div></div>
     </div>
     <div class="card">
       <h2>Jobs</h2>
-      ${jobCount === 0 ? '<p class="muted">No jobs configured yet. <a href="#/jobs">Add one</a>.</p>' : renderJobsTable(status.jobs)}
+      ${jobCount === 0 ? '<p class="muted">Nothing is protected yet. <a href="#/jobs">Add a backup</a>.</p>' : renderJobsTable(jobs)}
     </div>
     <div class="card">
       <h2>Recent issues</h2>
@@ -152,6 +214,7 @@ async function renderDashboard(view, status) {
 }
 
 function renderJobsTable(jobs) {
+  jobs = asArray(jobs);
   return `<table><thead><tr><th>Name</th><th>Status</th><th>Last success</th><th>Destinations</th><th></th></tr></thead><tbody>
     ${jobs.map(j => `<tr>
       <td>${esc(j.name)}</td>
@@ -191,7 +254,8 @@ async function pollRun(runId, el) {
 // ---------------------------------------------------------------------
 
 async function renderStorage(view) {
-  const [storage, providers] = await Promise.all([api('/api/storage'), api('/api/providers')]);
+  let [storage, providers] = await Promise.all([api('/api/storage'), api('/api/providers')]);
+  storage = asArray(storage); providers = asArray(providers);
   const families = ['cloud-drive', 'object-storage', 'sftp', 'local', 'generic-rclone'];
   const familyLabel = { 'cloud-drive': 'Cloud Drive', 'object-storage': 'Object Storage', 'sftp': 'SFTP', 'local': 'Local / External Drive', 'generic-rclone': 'Other' };
 
@@ -271,29 +335,19 @@ function fieldInputs(fields, prefix) {
 
 function showAddStorageModal(p) {
   if (p.id === 'local') {
-    showModal(`
-      <h2>Add Local / External Disk</h2>
-      <div id="modal-alert"></div>
-      <div class="form-row"><label>Name</label><input id="st-name" placeholder="e.g. usb-drive"></div>
-      <div class="form-row"><label>Destination folder (full path)</label><input id="st-path" placeholder="e.g. D:\\Backups or /mnt/backup"></div>
-      <div class="modal-actions">
-        <button class="secondary" onclick="closeModal()">Cancel</button>
-        <button id="st-save">Test &amp; Save</button>
-      </div>
-    `);
-    document.getElementById('st-save').addEventListener('click', async () => {
-      const name = document.getElementById('st-name').value.trim();
-      const path = document.getElementById('st-path').value.trim();
-      await submitStorage(p, name, { path }, {}, 'modal-alert');
-    });
+    showLocalStorageModal(p);
+    return;
+  }
+  if (p.auth === 'oauth') {
+    showOAuthStorageModal(p);
     return;
   }
 
   showModal(`
     <h2>Configure ${esc(p.displayName)}</h2>
-    ${p.experimental ? alertBox('This provider is EXPERIMENTAL. See docs/providers/ for its limitations before relying on it.', 'warn') : ''}
-    ${p.requiresOwnOAuthApp ? alertBox('Google requires your own OAuth Client ID/Secret for this provider -- see docs/providers/GOOGLE-DRIVE.md.', 'warn') : ''}
-    ${p.backend === 'rclone' ? alertBox('Create the rclone remote first (rclone config, or Quick Connect below for supported providers), then enter its name here.') : ''}
+    ${p.experimental ? alertBox('This provider is EXPERIMENTAL. Review its limitations before relying on it.', 'warn') : ''}
+    ${p.requiresOwnOAuthApp ? alertBox('Enter your own OAuth Client ID and Client Secret. Authorization continues here in the GUI.', 'warn') : ''}
+    ${p.backend === 'rclone' ? alertBox('Connection and authorization are completed graphically. Saved tokens are never displayed.') : ''}
     <div id="modal-alert"></div>
     <div class="form-row"><label>Destination name (in Auto-Backup-Manager)</label><input id="st-name" placeholder="e.g. backblaze-primary"></div>
     ${fieldInputs(p.requiredFields, 'req')}
@@ -316,6 +370,62 @@ function showAddStorageModal(p) {
   });
 }
 
+function showOAuthStorageModal(p) {
+  showModal(`
+    <h2>Connect ${esc(p.displayName)}</h2>
+    <p>Sign in with the provider in your browser. Auto-Backup-Manager stores the resulting credential securely and never displays refresh tokens.</p>
+    <div id="modal-alert"></div>
+    <label>Destination name</label><input id="oauth-storage-name" placeholder="e.g. company-drive">
+    ${p.requiresOwnOAuthApp ? `<label>OAuth Client ID</label><input id="oauth-client-id" autocomplete="off"><label>OAuth Client Secret</label><input type="password" id="oauth-client-secret" autocomplete="new-password"><p class="field-hint">Google requires credentials from your own Desktop OAuth application.</p>` : ''}
+    <div class="modal-actions"><button class="secondary" onclick="closeModal()">Cancel</button><button id="oauth-connect">Connect ${esc(p.displayName)}</button></div>
+  `);
+  document.getElementById('oauth-connect').addEventListener('click', async () => {
+    const alertEl = document.getElementById('modal-alert');
+    const storageName = document.getElementById('oauth-storage-name').value.trim();
+    const clientId = document.getElementById('oauth-client-id')?.value.trim() || '';
+    const clientSecret = document.getElementById('oauth-client-secret')?.value || '';
+    try {
+      const started = await api('/api/storage/oauth/start', {method: 'POST', body: JSON.stringify({provider: p.id, storageName, clientId, clientSecret})});
+      document.getElementById('oauth-connect').disabled = true;
+      while (true) {
+        const progress = await api('/api/runs/' + started.runId);
+        const authURL = progress.result && progress.result.authorizationUrl;
+        alertEl.innerHTML = `<p>${esc(progress.stage)}</p>${authURL ? `<p><a class="btn" href="${esc(authURL)}" target="_blank" rel="noopener">Open authorization page</a></p>` : ''}${progress.error ? alertBox(progress.error) : ''}`;
+        if (progress.done) {
+          if (progress.error) return;
+          const remote = progress.result.remote;
+          await submitStorage(p, storageName, {remote}, {}, 'modal-alert');
+          return;
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
+    } catch (e) { alertEl.innerHTML = alertBox(e.message); }
+  });
+}
+
+function showLocalStorageModal(p, initialName, initialPath) {
+    showModal(`
+      <h2>Add Local / External Disk</h2>
+      <div id="modal-alert"></div>
+      <div class="form-row"><label>Name</label><input id="st-name" placeholder="e.g. usb-drive" value="${esc(initialName || '')}"></div>
+      <div class="form-row"><label>Destination folder on this server</label><div class="path-bar"><input id="st-path" value="${esc(initialPath || '')}" placeholder="Choose a folder"><button class="secondary" id="st-browse">Browse</button></div></div>
+      <div class="modal-actions">
+        <button class="secondary" onclick="closeModal()">Cancel</button>
+        <button id="st-save">Test &amp; Save</button>
+      </div>
+    `);
+    document.getElementById('st-save').addEventListener('click', async () => {
+      const name = document.getElementById('st-name').value.trim();
+      const path = document.getElementById('st-path').value.trim();
+      await submitStorage(p, name, { path }, {}, 'modal-alert');
+    });
+    document.getElementById('st-browse').addEventListener('click', () => {
+      const name = document.getElementById('st-name').value.trim();
+      const path = document.getElementById('st-path').value.trim();
+      showServerBrowser({ title: 'Choose backup destination folder', multiple: false, selected: path ? [path] : [], start: path, onDone: values => showLocalStorageModal(p, name, values[0]) });
+    });
+}
+
 async function submitStorage(p, name, options, secrets, alertId) {
   const alertEl = document.getElementById(alertId);
   if (!name) { alertEl.innerHTML = alertBox('Name is required.'); return; }
@@ -323,7 +433,12 @@ async function submitStorage(p, name, options, secrets, alertId) {
   try {
     await api('/api/storage', { method: 'POST', body: JSON.stringify({ name, provider: p.id, options, secrets }) });
     closeModal();
-    renderStorage(document.getElementById('view'));
+    if (sessionStorage.getItem('abm-return-to-job')) {
+      sessionStorage.removeItem('abm-return-to-job');
+      location.hash = '#/jobs';
+    } else {
+      renderStorage(document.getElementById('view'));
+    }
   } catch (e) {
     alertEl.innerHTML = alertBox(e.message);
   }
@@ -334,7 +449,8 @@ async function submitStorage(p, name, options, secrets, alertId) {
 // ---------------------------------------------------------------------
 
 async function renderJobs(view) {
-  const [jobs, storage] = await Promise.all([api('/api/jobs'), api('/api/storage')]);
+  let [jobs, storage] = await Promise.all([api('/api/jobs'), api('/api/storage')]);
+  jobs = asArray(jobs); storage = asArray(storage);
   view.innerHTML = `
     <h1>Backup Jobs</h1>
     <div class="toolbar"><button id="add-job">Create Job</button></div>
@@ -354,7 +470,15 @@ async function renderJobs(view) {
       </tbody></table>`}
     </div>
   `;
-  document.getElementById('add-job').addEventListener('click', () => showJobModal(storage));
+  document.getElementById('add-job').addEventListener('click', () => {
+    if (!storage.length) {
+      pendingJobDraft = pendingJobDraft || {};
+      sessionStorage.setItem('abm-return-to-job', '1');
+      view.innerHTML = `<h1>Add Backup</h1><div class="card empty-state"><h2>No backup destination is connected yet</h2><p>Connect storage first. Your backup setup will resume automatically.</p><a class="btn" href="#/storage">Connect Storage</a></div>`;
+      return;
+    }
+    showJobModal(storage, pendingJobDraft || {});
+  });
   document.querySelectorAll('[data-run]').forEach(btn => btn.addEventListener('click', () => runJobNow(btn.dataset.run)));
   document.querySelectorAll('[data-toggle]').forEach(btn => btn.addEventListener('click', async () => {
     await api(`/api/jobs/${encodeURIComponent(btn.dataset.toggle)}/enable`, { method: 'POST', body: JSON.stringify({ enabled: btn.dataset.enabled !== 'true' }) });
@@ -365,37 +489,108 @@ async function renderJobs(view) {
     await api('/api/jobs/' + encodeURIComponent(btn.dataset.delete), { method: 'DELETE' });
     renderJobs(view);
   }));
+  if (storage.length && pendingJobDraft && !document.getElementById('modal-root').innerHTML) showJobModal(storage, pendingJobDraft);
 }
 
-function showJobModal(storage) {
+function captureJobDraft(existing) {
+  if (!document.getElementById('j-name')) return existing || {};
+  return {
+    name: document.getElementById('j-name').value.trim(),
+    sources: asArray((existing || {}).sources),
+    destinations: [...document.querySelectorAll('.j-dest:checked')].map(c => c.value),
+    policy: document.getElementById('j-policy').value,
+    keepWithinHourly: document.getElementById('j-retention').value.trim(),
+    databaseEnabled: document.getElementById('j-db-enabled').checked,
+    database: {
+      kind: document.getElementById('j-db-kind').value,
+      name: document.getElementById('j-db-name').value.trim(),
+      host: document.getElementById('j-db-host').value.trim(),
+      port: Number(document.getElementById('j-db-port').value || 0),
+      path: document.getElementById('j-db-path').value.trim(),
+      username: document.getElementById('j-db-user').value.trim(),
+      password: document.getElementById('j-db-password').value,
+    },
+  };
+}
+
+function showJobModal(storage, draft) {
+  draft = draft || {};
+  draft.sources = asArray(draft.sources);
+  draft.destinations = asArray(draft.destinations);
+  draft.database = draft.database || {};
   showModal(`
-    <h2>Create Backup Job</h2>
+    <h2>Create Backup</h2>
     <div id="modal-alert"></div>
-    <div class="form-row"><label>Name</label><input id="j-name"></div>
-    <div class="form-row"><label>Source folders (one per line)</label><textarea id="j-sources" rows="3" placeholder="/var/www&#10;/etc"></textarea></div>
+    <div class="form-row"><label>What are you protecting?</label><input id="j-name" value="${esc(draft.name || '')}" placeholder="e.g. Customer Portal"></div>
+    <div class="form-row"><label>Folders and application data on this server</label>
+      <div id="j-source-list" class="selected-paths">${draft.sources.length ? draft.sources.map(p => `<div class="selected-path"><span class="mono">${esc(p)}</span></div>`).join('') : '<span class="muted">No folders selected.</span>'}</div>
+      <button class="secondary" id="j-browse-sources">Browse server &amp; select folders</button>
+      <button class="secondary" id="j-detect-docker" ${draft.sources.length ? '' : 'disabled'}>Detect Docker / Compose data</button>
+      <details><summary>Advanced: enter an absolute path</summary><div class="path-bar"><input id="j-manual-source" placeholder="/opt/my-app"><button class="secondary" id="j-add-manual">Add</button></div></details>
+    </div>
     <div class="form-row"><label>Destinations</label>
-      ${storage.length === 0 ? '<p class="muted">Add a storage destination first.</p>' :
-        storage.map(s => `<div class="checkbox-row"><input type="checkbox" value="${esc(s.name)}" class="j-dest"> ${esc(s.name)}</div>`).join('')}
+      ${storage.map((s, i) => `<div class="checkbox-row"><input type="checkbox" value="${esc(s.name)}" class="j-dest" ${draft.destinations.includes(s.name) || (!draft.destinations.length && i === 0) ? 'checked' : ''}> ${esc(s.name)}</div>`).join('')}
     </div>
     <div class="form-row"><label>Destination policy</label>
-      <select id="j-policy"><option value="primary-required">Primary required (default)</option><option value="all-required">All required</option></select>
+      <select id="j-policy"><option value="primary-required" ${(draft.policy || 'primary-required') === 'primary-required' ? 'selected' : ''}>Primary required (default)</option><option value="all-required" ${draft.policy === 'all-required' ? 'selected' : ''}>All required</option></select>
     </div>
-    <div class="form-row"><label>Retention (keep hourly within)</label><input id="j-retention" value="240h" class="field-hint"></div>
-    <div class="field-hint">Default: keep hourly recovery points for 10 days (240h).</div>
+    <div class="form-row"><label>Recovery-point history</label><select id="j-retention"><option value="240h">10 days of hourly versions</option><option value="720h">30 days of hourly versions</option><option value="2160h">90 days of hourly versions</option></select></div>
+    <div class="checkbox-row"><input type="checkbox" id="j-db-enabled" ${draft.databaseEnabled ? 'checked' : ''}> Include a consistent database backup</div>
+    <div id="j-db-fields" class="subcard">
+      <label>Database type</label><select id="j-db-kind"><option value="mysql">MySQL / MariaDB / Percona</option><option value="postgresql">PostgreSQL</option><option value="sqlite">SQLite</option></select>
+      <label>Database name</label><input id="j-db-name" value="${esc(draft.database.name || '')}">
+      <div class="db-network"><label>Host</label><input id="j-db-host" value="${esc(draft.database.host || 'localhost')}"><label>Port</label><input type="number" id="j-db-port" value="${esc(draft.database.port || '')}"><label>Username</label><input id="j-db-user" value="${esc(draft.database.username || '')}"><label>Password</label><input type="password" id="j-db-password" value="${esc(draft.database.password || '')}" autocomplete="new-password"></div>
+      <div class="db-sqlite"><label>SQLite database file on this server</label><input id="j-db-path" value="${esc(draft.database.path || '')}"></div>
+      <button class="secondary" id="j-db-test">Test connection</button><span id="j-db-result"></span>
+    </div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeModal()">Cancel</button>
       <button id="j-save">Create</button>
     </div>
   `);
+  document.getElementById('j-retention').value = draft.keepWithinHourly || '240h';
+  document.getElementById('j-db-kind').value = draft.database.kind || 'mysql';
+  const toggleDB = () => {
+    const enabled = document.getElementById('j-db-enabled').checked;
+    const sqlite = document.getElementById('j-db-kind').value === 'sqlite';
+    document.getElementById('j-db-fields').style.display = enabled ? 'block' : 'none';
+    document.querySelector('.db-network').style.display = sqlite ? 'none' : 'block';
+    document.querySelector('.db-sqlite').style.display = sqlite ? 'block' : 'none';
+  };
+  document.getElementById('j-db-enabled').addEventListener('change', toggleDB);
+  document.getElementById('j-db-kind').addEventListener('change', toggleDB); toggleDB();
+  document.getElementById('j-browse-sources').addEventListener('click', () => {
+    pendingJobDraft = captureJobDraft(draft);
+    showServerBrowser({ title: 'Choose what to protect', multiple: true, selected: pendingJobDraft.sources, onDone: values => { pendingJobDraft.sources = values; showJobModal(storage, pendingJobDraft); } });
+  });
+  document.getElementById('j-detect-docker').addEventListener('click', async () => {
+    const current = captureJobDraft(draft);
+    try {
+      const result = await api('/api/docker/inspect?path=' + encodeURIComponent(current.sources[0]));
+      const safe = asArray(result.suggestions).filter(s => s.path).map(s => s.path);
+      const warnings = asArray(result.suggestions).filter(s => !s.path).map(s => s.message);
+      pendingJobDraft = current; pendingJobDraft.sources = [...new Set([...current.sources, ...safe])];
+      showJobModal(storage, pendingJobDraft);
+      if (warnings.length) document.getElementById('modal-alert').innerHTML = alertBox(warnings.join(' '), 'warn');
+    } catch (e) { document.getElementById('modal-alert').innerHTML = alertBox(e.message); }
+  });
+  document.getElementById('j-add-manual').addEventListener('click', () => {
+    const value = document.getElementById('j-manual-source').value.trim();
+    if (!value) return;
+    pendingJobDraft = captureJobDraft(draft); pendingJobDraft.sources = [...new Set([...pendingJobDraft.sources, value])]; showJobModal(storage, pendingJobDraft);
+  });
+  document.getElementById('j-db-test').addEventListener('click', async () => {
+    const state = captureJobDraft(draft); const result = document.getElementById('j-db-result'); result.textContent = ' Testing…';
+    try { await api('/api/database/test', {method: 'POST', body: JSON.stringify(state.database)}); result.innerHTML = ' ' + badge('Connected', 'ok'); }
+    catch (e) { result.innerHTML = ' ' + alertBox(e.message); }
+  });
   document.getElementById('j-save').addEventListener('click', async () => {
     const alertEl = document.getElementById('modal-alert');
-    const name = document.getElementById('j-name').value.trim();
-    const sources = document.getElementById('j-sources').value.split('\n').map(s => s.trim()).filter(Boolean);
-    const destinations = [...document.querySelectorAll('.j-dest:checked')].map(c => c.value);
-    const policy = document.getElementById('j-policy').value;
-    const keepWithinHourly = document.getElementById('j-retention').value.trim();
+    const state = captureJobDraft(draft);
+    const databases = state.databaseEnabled ? [state.database] : [];
     try {
-      await api('/api/jobs', { method: 'POST', body: JSON.stringify({ name, sources, destinations, policy, keepWithinHourly }) });
+      await api('/api/jobs', { method: 'POST', body: JSON.stringify({ name: state.name, sources: state.sources, destinations: state.destinations, policy: state.policy, keepWithinHourly: state.keepWithinHourly, databases }) });
+      pendingJobDraft = null;
       closeModal();
       renderJobs(document.getElementById('view'));
     } catch (e) { alertEl.innerHTML = alertBox(e.message); }
@@ -407,9 +602,9 @@ function showJobModal(storage) {
 // ---------------------------------------------------------------------
 
 async function renderSnapshots(view) {
-  const jobs = await api('/api/jobs');
+  const jobs = asArray(await api('/api/jobs'));
   view.innerHTML = `
-    <h1>Snapshots</h1>
+    <h1>Recovery Points</h1>
     <div class="card">
       <label>Job</label>
       <select id="snap-job">${jobs.map(j => `<option value="${esc(j.name)}">${esc(j.name)}</option>`).join('')}</select>
@@ -422,20 +617,45 @@ async function renderSnapshots(view) {
     if (!sel.value) { list.innerHTML = ''; return; }
     list.innerHTML = '<p class="muted">Loading...</p>';
     try {
-      const snaps = await api('/api/snapshots?job=' + encodeURIComponent(sel.value));
+      const snaps = asArray(await api('/api/snapshots?job=' + encodeURIComponent(sel.value)));
       list.innerHTML = `<div class="card"><table><thead><tr><th>Date/time</th><th>ID</th><th>Host</th><th>Paths</th><th></th></tr></thead><tbody>
         ${snaps.map(s => `<tr>
           <td>${esc(s.time)} ${s.isLatest ? badge('latest', 'ok') : ''}</td>
           <td class="mono">${esc(s.shortId)}</td>
           <td>${esc(s.hostname)}</td>
           <td class="mono">${s.paths.map(esc).join('<br>')}</td>
-          <td><a class="btn secondary" href="#/restore?job=${encodeURIComponent(sel.value)}&snapshot=${encodeURIComponent(s.id)}">Restore</a></td>
+          <td><button class="secondary" data-browse-recovery="${esc(s.id)}">Browse</button> <a class="btn secondary" href="#/restore?job=${encodeURIComponent(sel.value)}&snapshot=${encodeURIComponent(s.id)}">Restore</a></td>
         </tr>`).join('')}
       </tbody></table></div>`;
+      document.querySelectorAll('[data-browse-recovery]').forEach(btn => btn.addEventListener('click', () => showRecoveryPointBrowser(sel.value, btn.dataset.browseRecovery)));
     } catch (e) { list.innerHTML = alertBox(e.message); }
   };
   sel.addEventListener('change', load);
   if (jobs.length > 0) load();
+}
+
+async function showRecoveryPointBrowser(jobName, snapshotId) {
+  showModal('<h2>Browse recovery point</h2><p class="muted">Loading protected files…</p>');
+  try {
+    const data = await api('/api/recovery-point/contents?job=' + encodeURIComponent(jobName) + '&snapshot=' + encodeURIComponent(snapshotId));
+    const files = asArray(data.files);
+    showModal(`
+      <h2>Browse recovery point</h2>
+      <div class="subcard"><b>Recovery manifest</b><p>${esc(data.manifest.organization)} / ${esc(data.manifest.device)} / ${esc(data.manifest.job)}</p>
+        <p class="field-hint">Originally protected from:</p><ul>${asArray(data.manifest.sources).map(p => `<li class="mono">${esc(p)}</li>`).join('')}</ul>
+        ${asArray(data.manifest.databases).length ? `<p>Databases: ${data.manifest.databases.map(d => esc(d.kind + ': ' + d.name)).join(', ')}</p>` : ''}
+      </div>
+      <div class="file-browser recovery-tree">${files.map(f => `<label class="file-entry"><input type="checkbox" data-recovery-path="${esc(f.path)}"> ${f.type === 'dir' ? '📁' : '📄'} <span class="mono">${esc(f.path)}</span></label>`).join('') || '<p class="muted">This recovery point is empty.</p>'}</div>
+      <div class="modal-actions"><button class="secondary" onclick="closeModal()">Close</button><button id="recovery-restore-all">Restore everything</button><button id="recovery-restore-selected">Restore selected</button></div>
+    `);
+    const goRestore = selected => { pendingRestoreIncludes = selected; closeModal(); location.hash = '#/restore?job=' + encodeURIComponent(jobName) + '&snapshot=' + encodeURIComponent(snapshotId); };
+    document.getElementById('recovery-restore-all').addEventListener('click', () => goRestore([]));
+    document.getElementById('recovery-restore-selected').addEventListener('click', () => {
+      const chosen = [...document.querySelectorAll('[data-recovery-path]:checked')].map(x => x.dataset.recoveryPath);
+      if (!chosen.length) { alert('Select at least one file or folder.'); return; }
+      goRestore(chosen);
+    });
+  } catch (e) { showModal(`<h2>Browse recovery point</h2>${alertBox(e.message)}<div class="modal-actions"><button onclick="closeModal()">Close</button></div>`); }
 }
 
 // ---------------------------------------------------------------------
@@ -443,52 +663,67 @@ async function renderSnapshots(view) {
 // ---------------------------------------------------------------------
 
 async function renderRestore(view) {
-  const jobs = await api('/api/jobs');
+  const jobs = asArray(await api('/api/jobs'));
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   view.innerHTML = `
     <h1>Restore</h1>
     <div class="card">
       <label>Job</label>
       <select id="r-job">${jobs.map(j => `<option value="${esc(j.name)}" ${j.name === params.get('job') ? 'selected' : ''}>${esc(j.name)}</option>`).join('')}</select>
-      <label>Snapshot</label>
+      <label>Backup version</label>
       <select id="r-snapshot"><option value="latest">latest</option></select>
       <label>Target directory (leave blank for a safe auto-generated location)</label>
       <input id="r-target" placeholder="auto">
+      <div id="r-selection">${pendingRestoreIncludes.length ? alertBox(pendingRestoreIncludes.length + ' selected item(s) will be restored.', 'ok') : '<p class="field-hint">The whole project will be restored.</p>'}</div>
       <div class="checkbox-row"><input type="checkbox" id="r-inplace"> Restore in place (overwrites original data -- requires confirmation)</div>
       <div class="modal-actions" style="justify-content:flex-start">
-        <button id="r-start">Start Restore</button>
+        <button id="r-start" disabled>Start Restore</button>
       </div>
       <div id="r-progress"></div>
     </div>
   `;
   const jobSel = document.getElementById('r-job');
   const snapSel = document.getElementById('r-snapshot');
+  const startButton = document.getElementById('r-start');
   const loadSnaps = async () => {
+    startButton.disabled = true;
     if (!jobSel.value) return;
     try {
-      const snaps = await api('/api/snapshots?job=' + encodeURIComponent(jobSel.value));
+      const snaps = asArray(await api('/api/snapshots?job=' + encodeURIComponent(jobSel.value)));
       snapSel.innerHTML = '<option value="latest">latest</option>' +
         snaps.map(s => `<option value="${esc(s.id)}" ${s.id === params.get('snapshot') ? 'selected' : ''}>${esc(s.shortId)} - ${esc(s.time)}</option>`).join('');
+      startButton.disabled = false;
     } catch (e) { /* no destination configured yet */ }
   };
   jobSel.addEventListener('change', loadSnaps);
+  document.getElementById('r-inplace').addEventListener('change', event => {
+    const target = document.getElementById('r-target');
+    if (event.target.checked) target.value = '';
+    target.disabled = event.target.checked;
+  });
   if (jobs.length > 0) loadSnaps();
 
   document.getElementById('r-start').addEventListener('click', async () => {
     const inPlace = document.getElementById('r-inplace').checked;
     const progress = document.getElementById('r-progress');
-    if (inPlace && !confirm('This will OVERWRITE the original source data. Continue?')) return;
+    if (inPlace) {
+      const job = jobs.find(j => j.name === jobSel.value);
+      const paths = asArray(job && job.sources).join('\n');
+      if (!confirm('This advanced restore can overwrite the original locations below:\n\n' + paths + '\n\nContinue?')) return;
+      if (prompt('Type RESTORE ORIGINAL to confirm:') !== 'RESTORE ORIGINAL') return;
+    }
     try {
       const { runId, target } = await api('/api/restore', {
         method: 'POST',
         body: JSON.stringify({
           job: jobSel.value, snapshotId: snapSel.value,
           target: document.getElementById('r-target').value.trim(),
-          inPlace, confirm: inPlace,
+          include: pendingRestoreIncludes, inPlace, confirm: inPlace,
         }),
       });
-      progress.innerHTML = `<p>Restoring to <span class="mono">${esc(target)}</span>...</p>`;
-      await pollRun(runId, progress);
+      progress.innerHTML = `<p>Restoring to <span class="mono">${esc(target)}</span>...</p><div id="restore-run-status"></div>`;
+      await pollRun(runId, document.getElementById('restore-run-status'));
+      pendingRestoreIncludes = [];
     } catch (e) { progress.innerHTML = alertBox(e.message); }
   });
 }
@@ -524,7 +759,8 @@ async function renderSchedule(view) {
 // ---------------------------------------------------------------------
 
 async function renderDatabases(view) {
-  const [jobs, doctorChecks] = await Promise.all([api('/api/jobs'), api('/api/doctor')]);
+  let [jobs, doctorChecks] = await Promise.all([api('/api/jobs'), api('/api/doctor')]);
+  jobs = asArray(jobs); doctorChecks = asArray(doctorChecks);
   const dbTools = doctorChecks.filter(c => c.name.startsWith('db-tool:'));
   view.innerHTML = `
     <h1>Databases</h1>
@@ -537,7 +773,7 @@ async function renderDatabases(view) {
     </div>
     <div class="card">
       <h2>Jobs with database hooks</h2>
-      ${jobs.filter(j => j.databases && j.databases.length).length === 0 ? '<p class="muted">No job has a database hook configured yet. Add one by editing config.yaml\'s job entry (databases:), then store its credential with \'abm job set-db-credentials\'.</p>' :
+      ${jobs.filter(j => j.databases && j.databases.length).length === 0 ? '<p class="muted">No backup includes a database yet. Choose “Include a consistent database backup” when adding a backup.</p>' :
         jobs.filter(j => j.databases && j.databases.length).map(j => `<p><b>${esc(j.name)}</b>: ${j.databases.map(d => esc(d.kind) + ' (' + esc(d.name) + ')').join(', ')}</p>`).join('')}
     </div>
   `;
@@ -548,7 +784,7 @@ async function renderDatabases(view) {
 // ---------------------------------------------------------------------
 
 async function renderActivity(view) {
-  const entries = await api('/api/activity');
+  const entries = asArray(await api('/api/activity'));
   view.innerHTML = `
     <h1>Activity / Logs</h1>
     <div class="card">
@@ -566,7 +802,7 @@ async function renderActivity(view) {
 // ---------------------------------------------------------------------
 
 async function renderHealth(view) {
-  const checks = await api('/api/doctor');
+  const checks = asArray(await api('/api/doctor'));
   view.innerHTML = `
     <h1>System Health</h1>
     <div class="toolbar"><button id="recheck">Run checks again</button></div>
@@ -625,17 +861,17 @@ async function runSetupWizard() {
   return new Promise(resolve => {
     const view = document.getElementById('view');
     let step = 0;
-    const state = { deviceName: '', organization: '' };
+    const state = { deviceName: '', organization: '', jobName: '', sources: [], storageName: 'local-backup', storagePath: '', retention: '240h' };
 
     function render() {
       view.innerHTML = `
         <h1>Welcome to Auto-Backup-Manager</h1>
-        <div class="wizard-progress">${[0, 1, 2].map(i => `<div class="dot ${i <= step ? 'done' : ''}"></div>`).join('')}</div>
+        <div class="wizard-progress">${[0, 1, 2, 3, 4, 5].map(i => `<div class="dot ${i <= step ? 'done' : ''}"></div>`).join('')}</div>
         <div class="card">
           <div class="wizard-step active" id="wiz-step">${stepHtml()}</div>
           <div class="modal-actions" style="justify-content:flex-start">
             ${step > 0 ? '<button class="secondary" id="wiz-back">Back</button>' : ''}
-            <button id="wiz-next">${step === 2 ? 'Finish' : 'Next'}</button>
+            <button id="wiz-next">${step === 5 ? 'Open Dashboard' : (step === 4 ? 'Test & Run First Backup' : 'Next')}</button>
           </div>
           <div id="wiz-alert"></div>
         </div>
@@ -646,36 +882,83 @@ async function runSetupWizard() {
 
     function stepHtml() {
       if (step === 0) {
-        return `<p>Let's set up hourly, encrypted backups. This only takes a minute.</p>
-          <label>Name this device</label><input id="wiz-device" placeholder="e.g. web-server-1" value="${esc(state.deviceName)}">`;
+        return `<h2>Protect the files and applications that matter</h2><p>This guided setup will connect storage, choose one or more folders on this server, create an encrypted versioned backup, and verify the first recovery point.</p><p>No Restic, rclone, repository syntax, or snapshot IDs are required.</p>`;
       }
       if (step === 1) {
-        return `<label>Organization (used to scope backup paths)</label><input id="wiz-org" placeholder="e.g. acme-corp" value="${esc(state.organization)}">`;
+        return `<label>Organization / company</label><input id="wiz-org" placeholder="e.g. Motion Ventures Ltd" value="${esc(state.organization)}">
+          <label>Device / server name</label><input id="wiz-device" placeholder="e.g. MVL Web Server 01" value="${esc(state.deviceName)}">`;
       }
-      return `<p>Ready to create your configuration for <b>${esc(state.deviceName)}</b> (${esc(state.organization)}).</p>
-        <p class="field-hint">Next you'll add a storage destination and your first backup job from the Storage and Backup Jobs pages.</p>`;
+      if (step === 2) {
+        return `<label>Backup name</label><input id="wiz-job" placeholder="e.g. Motion Ventures Website" value="${esc(state.jobName)}">
+          <label>What should be protected?</label><div class="selected-paths">${state.sources.length ? state.sources.map(p => `<div class="selected-path mono">${esc(p)}</div>`).join('') : '<span class="muted">No folders selected.</span>'}</div>
+          <button class="secondary" id="wiz-browse">Browse this server and select folders</button>`;
+      }
+      if (step === 3) {
+        return `<h2>Choose a backup destination</h2><p>This first-run path configures local or externally mounted storage. Cloud accounts can also be connected graphically from Storage.</p>
+          <label>Destination name</label><input id="wiz-storage-name" value="${esc(state.storageName)}">
+          <label>Destination folder on this server</label><div class="path-bar"><input id="wiz-storage-path" value="${esc(state.storagePath)}" placeholder="Choose a folder"><button class="secondary" id="wiz-dest-browse">Browse</button></div>`;
+      }
+      if (step === 4) {
+        return `<h2>Review</h2><dl><dt>Organization</dt><dd>${esc(state.organization)}</dd><dt>Device</dt><dd>${esc(state.deviceName)}</dd><dt>Backup</dt><dd>${esc(state.jobName)}</dd><dt>Sources</dt><dd>${state.sources.map(esc).join('<br>')}</dd><dt>Destination</dt><dd>${esc(state.storagePath)}</dd></dl>
+          <label>Recovery-point history</label><select id="wiz-retention"><option value="240h">10 days of hourly versions</option><option value="720h">30 days of hourly versions</option></select>`;
+      }
+      return `<h2>Protection verified</h2><div id="wiz-result">${alertBox('The destination passed its read/write test and the first recovery point was created.', 'ok')}</div><p>Your dashboard is ready.</p>`;
     }
 
     async function onNext() {
       const alertEl = document.getElementById('wiz-alert');
-      if (step === 0) {
-        state.deviceName = document.getElementById('wiz-device').value.trim();
-        if (!state.deviceName) { alertEl.innerHTML = alertBox('Device name is required.'); return; }
-      }
       if (step === 1) {
-        state.organization = document.getElementById('wiz-org').value.trim() || 'default-org';
+        state.deviceName = document.getElementById('wiz-device').value.trim();
+        state.organization = document.getElementById('wiz-org').value.trim();
+        if (!state.deviceName || !state.organization) { alertEl.innerHTML = alertBox('Organization and device name are required.'); return; }
+        try { await api('/api/setup', { method: 'POST', body: JSON.stringify({deviceName: state.deviceName, organization: state.organization}) }); }
+        catch (e) { alertEl.innerHTML = alertBox(e.message); return; }
       }
       if (step === 2) {
+        state.jobName = document.getElementById('wiz-job').value.trim();
+        if (!state.jobName || !state.sources.length) { alertEl.innerHTML = alertBox('Give the backup a name and select at least one folder.'); return; }
+      }
+      if (step === 3) {
+        state.storageName = document.getElementById('wiz-storage-name').value.trim();
+        state.storagePath = document.getElementById('wiz-storage-path').value.trim();
+        if (!state.storageName || !state.storagePath) { alertEl.innerHTML = alertBox('Choose and name a destination folder.'); return; }
+      }
+      if (step === 4) {
+        state.retention = document.getElementById('wiz-retention').value;
         try {
-          await api('/api/setup', { method: 'POST', body: JSON.stringify(state) });
-          resolve();
-          return;
+          alertEl.innerHTML = '<p>Testing destination with a real encrypted write/read/delete round trip…</p>';
+          await api('/api/storage', {method: 'POST', body: JSON.stringify({name: state.storageName, provider: 'local', options: {path: state.storagePath}, secrets: {}})});
+          await api('/api/jobs', {method: 'POST', body: JSON.stringify({name: state.jobName, sources: state.sources, destinations: [state.storageName], policy: 'primary-required', keepWithinHourly: state.retention})});
+          const run = await api('/api/jobs/' + encodeURIComponent(state.jobName) + '/run', {method: 'POST', body: '{}'});
+          while (true) {
+            const status = await api('/api/runs/' + run.runId);
+            alertEl.innerHTML = `<p>${esc(status.stage)}…</p>`;
+            if (status.done) { if (status.error) throw new Error(status.error); break; }
+            await new Promise(r => setTimeout(r, 500));
+          }
+          const points = asArray(await api('/api/snapshots?job=' + encodeURIComponent(state.jobName)));
+          if (!points.length) throw new Error('The backup finished but no recovery point could be verified.');
         } catch (e) { alertEl.innerHTML = alertBox(e.message); return; }
       }
+      if (step === 5) { resolve(); return; }
       step++;
       render();
     }
 
+    render();
+    const originalRender = render;
+    render = function() {
+      originalRender();
+      if (step === 2) document.getElementById('wiz-browse').addEventListener('click', () => {
+        state.jobName = document.getElementById('wiz-job').value.trim();
+        showServerBrowser({title: 'Choose what to protect', multiple: true, selected: state.sources, onDone: values => { state.sources = values; render(); }});
+      });
+      if (step === 3) document.getElementById('wiz-dest-browse').addEventListener('click', () => {
+        state.storageName = document.getElementById('wiz-storage-name').value.trim();
+        state.storagePath = document.getElementById('wiz-storage-path').value.trim();
+        showServerBrowser({title: 'Choose destination folder', multiple: false, selected: state.storagePath ? [state.storagePath] : [], start: state.storagePath, onDone: values => { state.storagePath = values[0]; render(); }});
+      });
+    };
     render();
   });
 }

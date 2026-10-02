@@ -151,6 +151,28 @@ install_abm() {
   install -m 0755 "$TMP_DIR/abm" "$BIN_DIR/abm"
 }
 
+install_gui_service() {
+  log "installing local management GUI service"
+  install -m 0644 /dev/stdin /etc/systemd/system/auto-backup-manager-gui.service <<'EOF'
+[Unit]
+Description=Auto-Backup-Manager local management GUI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/abm gui --no-open
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now auto-backup-manager-gui.service
+}
+
 main() {
   [ "$(id -u)" -eq 0 ] || fail "this installer must be run as root (sudo bash install.sh)"
 
@@ -177,15 +199,14 @@ main() {
   install_rclone
   install_abm
 
+	install_gui_service
+
   log "install complete."
   log ""
-  log "Next steps:"
-  log "  sudo abm setup"
-  log "  sudo abm storage providers"
-  log "  sudo abm storage add --provider <id> --name <name> ..."
-  log "  sudo abm job add --name my-job --source /var/www --destination <name>"
-  log "  sudo abm backup now my-job"
-  log "  sudo abm schedule set"
+  log "Auto-Backup-Manager is running at http://127.0.0.1:8765"
+  log "On a VPS, keep this port private and open it through your existing SSH connection:"
+  log "  ssh -L 8765:127.0.0.1:8765 <user>@<server>"
+  log "Then open http://127.0.0.1:8765. All setup continues in the browser."
   log ""
   log "Uninstalling later (sudo abm uninstall) removes only the schedule; it"
   log "never deletes config, secrets, or backup repositories."

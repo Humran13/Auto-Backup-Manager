@@ -30,7 +30,12 @@ predictable.
 - **`--target` is required** unless you explicitly pass `--in-place`.
 - **`--in-place` requires confirmation** (an interactive `y/N` prompt, or
   `--yes` to skip it non-interactively) because it restores directly over
-  the job's original source path, overwriting whatever is there now.
+  the job's original source paths, overwriting whatever is there now. On
+  Windows, ABM first performs Restic's verified restore into a private staging
+  directory, then copies only the configured source trees back to their true
+  drive locations. This prevents Restic's drive component from creating an
+  incorrect nested path such as `C:\C\CompanyData` and also supports jobs
+  whose sources span multiple drives.
 - Restoring never requires "undoing" a newer snapshot — every snapshot is
   independently restorable at any time, because backups are additive (see
   [ARCHITECTURE.md](ARCHITECTURE.md)).
@@ -53,10 +58,9 @@ mysql myapp < /tmp/db-restore/.../myapp.sql              # into the live databas
 Prefer restoring into a new/temporary database first and validating before
 ever pointing an application at a restored database.
 
-## Interactive restore (not yet implemented)
+## Graphical restore
 
-The spec's full interactive restore wizard (choose job → choose
-snapshot/latest → browse path → choose destination → preview → restore) is
-not implemented yet; today's equivalent is the explicit flag-driven
-`abm snapshots` + `abm restore` sequence above. This is an acknowledged gap,
-not a silent omission — see the project's final status report.
+The local GUI provides the normal restore workflow: choose a backup and
+recovery point, browse its contents, optionally select paths, and restore to a
+new safe directory. Advanced restore to original locations requires both the
+warning confirmation and typing `RESTORE ORIGINAL`.
