@@ -110,6 +110,10 @@ function showServerBrowser(options) {
       alertEl.innerHTML = '';
     } catch (e) { if (sequence === loadSequence) alertEl.innerHTML = alertBox(e.message); }
   };
+  // Typing a path supersedes any directory request that was already in
+  // flight. Otherwise a slow initial root listing can overwrite the typed
+  // value in the small interval before the user presses Go.
+  document.getElementById('fb-path').addEventListener('input', () => { loadSequence++; });
   document.getElementById('fb-up').addEventListener('click', e => { if (e.currentTarget.dataset.parent) load(e.currentTarget.dataset.parent); });
   document.getElementById('fb-go').addEventListener('click', () => load(document.getElementById('fb-path').value.trim()));
   document.getElementById('fb-cancel').addEventListener('click', closeModal);
