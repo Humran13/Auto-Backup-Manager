@@ -9,6 +9,8 @@ const sourceB = path.join(testRoot, 'source-b');
 const destination = path.join(testRoot, 'destination');
 const restoreTarget = path.join(os.tmpdir(), 'abm-browser-restore-' + path.basename(testRoot));
 
+test.describe.configure({ mode: 'serial' });
+
 function restoredPath(target, source) {
   const parsed = path.parse(source);
   if (parsed.root && /^[A-Za-z]:\\$/.test(parsed.root)) return path.join(target, parsed.root[0], source.slice(parsed.root.length));
@@ -17,10 +19,8 @@ function restoredPath(target, source) {
 
 async function chooseServerFolder(page, value, keepOpen = false) {
   await page.getByLabel('Server path').fill(value);
-  const loaded = page.waitForResponse(response => response.url().includes('/api/files?path=') && response.request().method() === 'GET');
   await page.getByRole('button', { name: 'Go', exact: true }).click();
-  await loaded;
-  await expect(page.locator('.file-entry.current').getByText(value, { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Server path')).toHaveAttribute('data-loaded-path', value);
   await page.locator('#fb-current').check();
   if (!keepOpen) await page.getByRole('button', { name: 'Use selected' }).click();
 }

@@ -93,6 +93,7 @@ function showServerBrowser(options) {
       if (sequence !== loadSequence) return;
       current = data.path;
       document.getElementById('fb-path').value = current;
+      document.getElementById('fb-path').dataset.loadedPath = current;
       document.getElementById('fb-up').disabled = !data.parent;
       document.getElementById('fb-up').dataset.parent = data.parent || '';
       document.getElementById('fb-roots').innerHTML = asArray(data.roots).map(root => `<button class="secondary" data-root="${esc(root)}">${esc(root)}</button>`).join('');
