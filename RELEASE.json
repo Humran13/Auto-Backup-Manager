@@ -1,6 +1,6 @@
 {
   "channel": "rc",
-  "version": "v0.9.1-rc.1",
+  "version": "v0.9.2-rc.1",
   "prerelease": true,
-  "note": "Pre-1.0 release candidate. Not production-ready -- see docs/TESTING.md for exactly what has and hasn't been validated. Adds the local web GUI (abm gui); see docs/GUI.md, including its known limitations (no real-browser visual verification has been performed). Both installers resolve this file instead of GitHub's /releases/latest endpoint, which never returns a prerelease and returns 404 for a repository with no stable release at all -- see docs/TROUBLESHOOTING.md."
+  "note": "Pre-1.0 release candidate. Adds complete graphical onboarding, server-side multi-folder selection, graphical provider and database setup, recovery manifests/content browsing, safe restore, Docker Compose suggestions, automatic GUI startup, and real Playwright browser acceptance on Windows and Linux. Real cloud-account OAuth remains credential-gated; see docs/TESTING.md and docs/GUI.md."
 }
