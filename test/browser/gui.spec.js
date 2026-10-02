@@ -91,7 +91,7 @@ test('rendered GUI completes setup, backup, recovery browsing, and safe restore'
   await expect(oldestRow).toHaveCount(1);
   await oldestRow.getByRole('button', { name: 'Browse' }).click();
   await expect(page.getByText('Recovery manifest')).toBeVisible();
-  await expect(page.getByText(sourceA, { exact: true })).toBeVisible();
+  await expect(page.locator('#modal-root .subcard li').getByText(sourceA, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Close' }).click();
 
   await oldestRow.getByRole('link', { name: 'Restore' }).click();
