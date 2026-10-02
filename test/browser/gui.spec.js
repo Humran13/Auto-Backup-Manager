@@ -17,7 +17,10 @@ function restoredPath(target, source) {
 
 async function chooseServerFolder(page, value, keepOpen = false) {
   await page.getByLabel('Server path').fill(value);
+  const loaded = page.waitForResponse(response => response.url().includes('/api/files?path=') && response.request().method() === 'GET');
   await page.getByRole('button', { name: 'Go', exact: true }).click();
+  await loaded;
+  await expect(page.locator('.file-entry.current').getByText(value, { exact: true })).toBeVisible();
   await page.locator('#fb-current').check();
   if (!keepOpen) await page.getByRole('button', { name: 'Use selected' }).click();
 }
@@ -146,6 +149,7 @@ test('provider, database, settings, and empty-state workflows are graphical', as
   });
 
   await page.goto('/#/storage');
+  await expect(page.getByRole('heading', { name: 'Storage', exact: true })).toBeVisible();
   const openProvider = async id => {
     await page.locator(`[data-connect-provider="${id}"]`).click();
   };
@@ -184,6 +188,7 @@ test('provider, database, settings, and empty-state workflows are graphical', as
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.goto('/#/jobs');
+  await expect(page.getByRole('heading', { name: 'Backup Jobs', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Create Job' }).click();
   await page.locator('#j-db-enabled').check();
   await expect(page.locator('#j-db-fields')).toBeVisible();
@@ -192,11 +197,13 @@ test('provider, database, settings, and empty-state workflows are graphical', as
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(page.locator('#s-device')).toHaveValue('Test Server');
   await expect(page.locator('#s-org')).toHaveValue('Test Company');
 
   await page.route('**/api/storage', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
   await page.goto('/#/jobs');
+  await expect(page.getByRole('heading', { name: 'Backup Jobs', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Create Job' }).click();
   await expect(page.getByRole('heading', { name: 'No backup destination is connected yet' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Connect Storage' })).toBeVisible();
